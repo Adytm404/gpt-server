@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&family=Newsreader:ital,wght@1,500&display=swap');
+
+:root {
+  font-family: 'Manrope', sans-serif;
+  color: #17171b;
+  background: #f8f8f6;
+  font-synthesis: none;
+  --ink: #17171b;
+  --muted: #72727c;
+  --line: #e7e7e3;
+  --surface: #fff;
+  --soft: #f3f3f0;
+  --accent: #7657ff;
+  --accent-soft: #f0edff;
+  --green: #20876a;
+  --red: #d04d4d;
+  --amber: #bd7b23;
+  --terminal: #151518;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; background: #f8f8f6; }
+button, input, textarea, select { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button { color: inherit; }
+a { color: inherit; text-decoration: none; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
