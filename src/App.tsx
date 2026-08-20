@@ -1,16 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, Bell, Bot, Boxes, Check, CheckCircle2,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Command, Copy, Cpu, Database, Download,
   Eye, EyeOff, FileCode2, Gauge, HardDrive, History, KeyRound, LayoutGrid, ListFilter, LockKeyhole, Mail, MemoryStick,
-  Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
+  LogOut, Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
   Settings, ShieldCheck, Sparkles, Square, Terminal, UserRound, X, Zap,
 } from 'lucide-react'
 import { executionLogs, servers, type Server } from './data'
+import AdminConsole from './admin/AdminConsole'
+import { clearSessionCache, SessionProvider, useSession } from './auth/SessionContext'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/$/, '')
+
+async function apiError(response: Response) {
+  try {
+    const body = await response.json() as { error?: string; message?: string }
+    return body.error || body.message || `Request failed (${response.status})`
+  } catch {
+    return `Request failed (${response.status})`
+  }
+}
+
+function csrfToken() {
+  const name = 'opsai_csrf'
+  const value = document.cookie.split('; ').find(cookie => cookie.startsWith(`${name}=`))?.slice(name.length + 1)
+  return value ? decodeURIComponent(value) : ''
+}
 
 type DemoAction = { kind: string; title: string; detail?: string }
 const openDemo = (kind: string, title: string, detail?: string) => window.dispatchEvent(new CustomEvent<DemoAction>('opsai:demo', { detail: { kind, title, detail } }))
@@ -48,7 +66,7 @@ function DemoContent({ action }: { action: DemoAction }) {
   if (action.kind === 'rules') return <div className="demo-rules">{['Block recursive deletion', 'Protect package managers', 'Require approval for service restart', 'Prevent firewall lockout'].map((rule, index) => <label key={rule}><span><b>{rule}</b><small>{index < 2 ? 'Critical guardrail' : 'Workspace policy'}</small></span><input type="checkbox" defaultChecked /></label>)}</div>
   if (action.kind === 'sessions') return <div className="demo-list">{['Edge / Windows 11 / Jakarta', 'Chrome / macOS / Singapore'].map((item, index) => <button key={item} onClick={() => showToast(index ? 'Session revoked' : 'This is your current session')}><MonitorIcon /><span><b>{item}</b><small>{index ? 'Last active yesterday' : 'Current session'}</small></span><em>{index ? 'Revoke' : 'Current'}</em></button>)}</div>
   if (action.kind === 'avatar') return <div className="avatar-options">{['AR', 'A', 'NR', 'OP'].map((item, index) => <button className={index === 0 ? 'selected' : ''} key={item} onClick={() => showToast(`Avatar ${item} selected`)}>{item}</button>)}<label className="button secondary"><Paperclip size={14} /> Upload image<input type="file" hidden accept="image/*" onChange={() => showToast('Avatar image selected')} /></label></div>
-  if (action.kind === 'password') return <div className="demo-form"><label>Current password<input type="password" placeholder="Current password" /></label><label>New password<input type="password" placeholder="8+ characters" /></label><label>Confirm password<input type="password" placeholder="Repeat new password" /></label></div>
+  if (action.kind === 'password') return <div className="demo-form"><label>Current password<input type="password" placeholder="Current password" /></label><label>New password<input type="password" minLength={12} placeholder="12+ characters" /></label><label>Confirm password<input type="password" minLength={12} placeholder="Repeat new password" /></label></div>
   if (action.kind === 'reset') return <div className="demo-form"><label>Email address<input type="email" defaultValue="arya@northstar.dev" /></label><div className="demo-note"><Mail size={16} /> Reset instructions will be sent to this address.</div></div>
   if (action.kind === 'email') return <div className="demo-form two"><label>Frequency<select defaultValue="Daily"><option>Daily</option><option>Weekly</option></select></label><label>Delivery time<input type="time" defaultValue="09:00" /></label><label className="wide">Recipients<input defaultValue="arya@northstar.dev" /></label></div>
   if (action.kind === 'oauth') return <div className="oauth-preview"><Zap size={28} /><h3>{action.title.includes('Google') ? 'Choose a Google account' : 'Connect Slack workspace'}</h3><p>{action.title.includes('Google') ? <>Continue as <b>arya@northstar.dev</b> in this visual demo.</> : <>Demo connection will route alerts to <b>#ops-alerts</b>.</>}</p></div>
@@ -77,6 +95,23 @@ const recentChats = [
 ]
 
 function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () => void; expanded: boolean; toggle: () => void }) {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { session } = useSession()
+  const [loggingOut, setLoggingOut] = useState(false)
+  const initials = session?.user.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase() || 'U'
+  const logout = async () => {
+    setLoggingOut(true)
+    try {
+      const response = await fetch(`${API_URL}/api/v1/auth/logout`, { method: 'POST', credentials: 'include', headers: { 'X-CSRF-Token': csrfToken() } })
+      if (!response.ok) throw new Error(await apiError(response))
+      clearSessionCache()
+      navigate('/login', { replace: true })
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Unable to sign out')
+      setLoggingOut(false)
+    }
+  }
   return <>
     <aside className={cn('sidebar', open && 'is-open', expanded && 'expanded')}>
       <div className="sidebar-top"><BrandMark /><strong>OpsAI</strong><button className="sidebar-toggle" onClick={toggle} aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}>{expanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</button></div>
@@ -87,8 +122,10 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       <div className="sidebar-bottom">
         <button className="nav-icon" onClick={() => openDemo('help', 'Help & resources', 'Find guidance without leaving your workspace.')}><CircleHelp size={18} /><span className="nav-label">Help</span><span className="tooltip">Help</span></button>
         <NavLink to="/settings" className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Settings size={18} /><span className="nav-label">Settings</span><span className="tooltip">Settings</span></NavLink>
+        {session?.user.platform_role === 'admin' && <NavLink to="/admin/models" className={cn('nav-icon', 'admin-nav-link', location.pathname.startsWith('/admin') && 'active')}><ShieldCheck size={18} /><span className="nav-label">Platform admin</span><span className="tooltip">Platform admin</span></NavLink>}
         <div className="sidebar-plan"><div><span><Zap size={13} /> Control plan</span><b>68% used</b></div><i><b /></i><p>680 of 1,000 operations</p><NavLink to="/pricing">Manage plan <ArrowRight size={12} /></NavLink></div>
-        <NavLink to="/profile" className="profile-link" aria-label="Profile"><span className="avatar">AR</span><span><b>Aria Rahman</b><small>Workspace owner</small></span><ChevronRight size={14} /></NavLink>
+        <NavLink to="/profile" className="profile-link" aria-label="Profile"><span className="avatar">{initials}</span><span><b>{session?.user.full_name || 'Account'}</b><small>{session?.workspace.role ? `Workspace ${session.workspace.role}` : session?.user.email}</small></span><ChevronRight size={14} /></NavLink>
+        <button className="nav-icon" onClick={logout} disabled={loggingOut}><LogOut size={18} /><span className="nav-label">{loggingOut ? 'Signing out...' : 'Sign out'}</span><span className="tooltip">Sign out</span></button>
       </div>
     </aside>
     {open && <button className="sidebar-scrim" onClick={close} aria-label="Close menu" />}
@@ -97,9 +134,10 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
 
 function Topbar({ menu }: { menu: () => void }) {
   const location = useLocation()
-  const section = location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
+  const { session } = useSession()
+  const section = location.pathname.startsWith('/admin') ? 'Platform admin' : location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
   return <header className="topbar">
-    <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button><button className="workspace-picker" onClick={() => openDemo('workspace', 'Switch workspace', 'Select where you want to operate.')}><span className="workspace-dot" /> Northstar Ops <ChevronDown size={14} /></button><span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
+    <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button><button className="workspace-picker" onClick={() => openDemo('workspace', 'Switch workspace', 'Select where you want to operate.')}><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'} <ChevronDown size={14} /></button><span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
     <div className="topbar-actions"><button className="icon-button mobile-hide" onClick={() => openDemo('search', 'Search workspace')} aria-label="Search"><Search size={17} /></button><button className="icon-button" onClick={() => openDemo('notifications', 'Notifications', 'Recent workspace activity.')} aria-label="Notifications"><Bell size={17} /><i className="notification-dot" /></button><NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink></div>
   </header>
 }
@@ -116,8 +154,35 @@ function AppShell() {
     <Route path="/executions" element={<ExecutionsPage />} />
     <Route path="/settings" element={<SettingsPage />} />
     <Route path="/profile" element={<ProfilePage />} />
+    <Route path="/forbidden" element={<ForbiddenPage />} />
+    <Route path="/admin/*" element={<PlatformAdminRoute><AdminConsole /></PlatformAdminRoute>} />
     <Route path="*" element={<PlaceholderPage />} />
   </Routes></main></div></div>
+}
+
+function PlatformAdminRoute({ children }: { children: React.ReactNode }) {
+  const { session } = useSession()
+  return session?.user.platform_role === 'admin' ? children : <Navigate to="/forbidden" replace />
+}
+
+function ForbiddenPage() {
+  return <div className="forbidden-page page-enter"><div><i><ShieldCheck size={25} /></i><span className="page-eyebrow">Access restricted</span><h1>Platform clearance required.</h1><p>This area is reserved for platform administrators. Your workspace access remains unchanged.</p><NavLink to="/chat" className="button dark"><ArrowLeft size={14} /> Return to command center</NavLink></div></div>
+}
+
+function AuthenticatedSession() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const { session, loading, error } = useSession()
+  useEffect(() => {
+    if (loading || session) return
+    if (error) console.error('Session check failed', error)
+    navigate('/login', { replace: true, state: { from: location.pathname + location.search } })
+  }, [error, loading, location.pathname, location.search, navigate, session])
+  return session ? <AppShell /> : null
+}
+
+function AuthenticatedApp() {
+  return <SessionProvider><AuthenticatedSession /></SessionProvider>
 }
 
 function LandingPage() {
@@ -158,17 +223,53 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const [loading, setLoading] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const submit = (event: React.FormEvent) => {
+  const [fullName, setFullName] = useState('')
+  const [workspace, setWorkspace] = useState('')
+  const [error, setError] = useState('')
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!email || password.length < 8) return
+    if (!email || password.length < 12 || (register && (!fullName || !workspace))) return
     setLoading(true)
-    window.setTimeout(() => navigate('/chat'), 900)
+    setError('')
+    try {
+      const body = register ? { full_name: fullName, workspace_name: workspace, email, password } : { email, password }
+      const response = await fetch(`${API_URL}/api/v1/auth/${mode}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!response.ok) throw new Error(await apiError(response))
+      navigate('/chat', { replace: true })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to complete request')
+      setLoading(false)
+    }
   }
-  return <div className="auth-page"><NavLink to="/" className="auth-brand"><BrandMark /><span>OpsAI</span></NavLink><main className="auth-form-panel"><div className="auth-form-wrap"><span className="page-eyebrow">{register ? 'Create workspace' : 'Welcome back'}</span><h1>{register ? 'Start operating.' : 'Return to control.'}</h1><p>{register ? 'Create your account and connect your first server in minutes.' : 'Sign in to inspect infrastructure and continue active operations.'}</p><button className="auth-sso" onClick={() => openDemo('oauth', 'Continue with Google', 'Choose a demo Google account to continue.')}><span>G</span> Continue with Google</button><div className="auth-divider"><i /> or continue with email <i /></div><form onSubmit={submit}>{register && <><label className="auth-field"><span>Full name</span><div><UserRound size={15} /><input required placeholder="Aria Rahman" autoComplete="name" /></div></label><label className="auth-field"><span>Workspace name</span><div><Boxes size={15} /><input required placeholder="Northstar Ops" /></div></label></>}<label className="auth-field"><span>Email address</span><div><Mail size={15} /><input required type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@company.com" autoComplete="email" /></div></label><label className="auth-field"><span>Password {register && <small>8+ characters</small>}</span><div><LockKeyhole size={15} /><input required minLength={8} type={showPassword ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter your password" autoComplete={register ? 'new-password' : 'current-password'} /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button></div></label>{!register && <div className="auth-options"><label><input type="checkbox" defaultChecked /> Keep me signed in</label><button type="button" onClick={() => openDemo('reset', 'Reset your password', 'We will send a recovery link.')}>Forgot password?</button></div>}{register && <label className="auth-consent"><input required type="checkbox" /> <span>I agree to the Terms and acknowledge the Privacy Policy.</span></label>}<button className="button dark auth-submit" disabled={loading || !email || password.length < 8}>{loading ? <><span className="tiny-spinner" /> {register ? 'Creating workspace...' : 'Signing in...'}</> : <>{register ? 'Create account' : 'Sign in'} <ArrowRight size={15} /></>}</button></form><p className="auth-switch">{register ? 'Already have an account?' : 'New to OpsAI?'} <NavLink to={register ? '/login' : '/register'}>{register ? 'Sign in' : 'Create an account'}</NavLink></p><div className="auth-trust"><ShieldCheck size={13} /> Authentication protected with encrypted sessions</div></div></main><aside className="auth-visual"><div className="auth-grid" /><div className="auth-visual-copy"><div className="ai-orb"><div className="orb-core" /><div className="orb-ring ring-one" /><div className="orb-ring ring-two" /></div><span>CONTROLLED BY DESIGN</span><h2>Every command visible.<br />Every action accountable.</h2><p>AI-assisted server operations with human approval kept in the loop.</p></div><div className="auth-operation"><header><span><i /> LIVE OPERATION</span><b>READ ONLY</b></header><div><i><Check size={12} /></i><span><b>SSH session secured</b><small>production-api / key authenticated</small></span></div><div><i><Check size={12} /></i><span><b>System pressure inspected</b><small>load average within normal range</small></span></div><div className="running"><i><span /></i><span><b>Reading service health</b><small>3 of 4 checks completed</small></span></div><footer><ShieldCheck size={12} /> Approval policy enforced</footer></div><div className="auth-visual-foot"><span>3 SERVERS ONLINE</span><span>ZERO HIDDEN EXECUTION</span></div></aside></div>
+  return <div className="auth-page">
+    <NavLink to="/" className="auth-brand"><BrandMark /><span>OpsAI</span></NavLink>
+    <main className="auth-form-panel"><div className="auth-form-wrap">
+      <span className="page-eyebrow">{register ? 'Create workspace' : 'Welcome back'}</span>
+      <h1>{register ? 'Start operating.' : 'Return to control.'}</h1>
+      <p>{register ? 'Create your account and connect your first server in minutes.' : 'Sign in to inspect infrastructure and continue active operations.'}</p>
+      <button type="button" className="auth-sso" onClick={() => openDemo('oauth', 'Google sign-in demo', 'Google authentication is not connected.')}><span>G</span> Continue with Google (demo)</button>
+      <div className="auth-divider"><i /> or continue with email <i /></div>
+      <form onSubmit={submit}>
+        {register && <>
+          <label className="auth-field"><span>Full name</span><div><UserRound size={15} /><input required value={fullName} onChange={event => setFullName(event.target.value)} placeholder="Aria Rahman" autoComplete="name" /></div></label>
+          <label className="auth-field"><span>Workspace name</span><div><Boxes size={15} /><input required value={workspace} onChange={event => setWorkspace(event.target.value)} placeholder="Northstar Ops" autoComplete="organization" /></div></label>
+        </>}
+        <label className="auth-field"><span>Email address</span><div><Mail size={15} /><input required type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@company.com" autoComplete="email" /></div></label>
+        <label className="auth-field"><span>Password <small>12+ characters</small></span><div><LockKeyhole size={15} /><input required minLength={12} type={showPassword ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter your password" autoComplete={register ? 'new-password' : 'current-password'} /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button></div></label>
+        {!register && <div className="auth-options"><label><input type="checkbox" defaultChecked /> Keep me signed in</label><button type="button" onClick={() => openDemo('reset', 'Reset password', 'Password reset is a visual demo.')}>Forgot password?</button></div>}
+        {register && <label className="auth-consent"><input required type="checkbox" /> I agree to the Terms of Service and acknowledge the Privacy Policy.</label>}
+        {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
+        <button className="button dark auth-submit" disabled={loading}>{loading ? <><span className="tiny-spinner" /> {register ? 'Creating workspace...' : 'Signing in...'}</> : register ? 'Create workspace' : 'Sign in'}</button>
+      </form>
+      <p className="auth-switch">{register ? 'Already operating?' : 'New to OpsAI?'} <NavLink to={register ? '/login' : '/register'}>{register ? 'Sign in' : 'Create a workspace'}</NavLink></p>
+      <div className="auth-trust"><ShieldCheck size={12} /> Encrypted session / Approval-first operations</div>
+    </div></main>
+    <aside className="auth-visual"><div className="auth-grid" /><div className="auth-visual-copy"><div className="ai-orb"><div className="orb-core" /><div className="orb-ring ring-one" /><div className="orb-ring ring-two" /></div><span>CONTROL PLANE / AUTHENTICATED</span><h2>Operate with context.<br />Execute with confidence.</h2><p>One secure workspace for every server, investigation, approval, and command output.</p></div><div className="auth-operation"><header><span><i /> OPERATION PREVIEW</span><b>READ ONLY</b></header><div><i><Check size={12} /></i><span><b>Connected to production-api</b><small>Identity verified / SSH key accepted</small></span></div><div><i><Check size={12} /></i><span><b>Execution plan approved</b><small>3 read-only diagnostic commands</small></span></div><div className="running"><i><span /></i><span><b>Streaming verified output</b><small>Every command remains visible</small></span></div><footer><ShieldCheck size={11} /> HUMAN APPROVAL REMAINS IN THE LOOP</footer></div><div className="auth-visual-foot"><span>SESSION ENCRYPTED</span><span>OPS / 2026</span></div></aside>
+  </div>
 }
 
 function App() {
-  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<PricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/*" element={<AppShell />} /></Routes></>
+  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<PricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
 }
 
 function StatusPill({ status }: { status: Server['status'] }) {
