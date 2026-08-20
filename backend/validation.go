@@ -13,6 +13,8 @@ import (
 var safeToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@/+:-]*$`)
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
+const maxModelAPIKeyBytes = 16 * 1024
+
 type serverInput struct {
 	Name            string `json:"name"`
 	Host            string `json:"host"`
@@ -91,7 +93,7 @@ func validHostname(host string) bool {
 }
 
 func validateModelInput(in modelInput) error {
-	if in.APIKey != "" || strings.TrimSpace(in.Name) == "" || len(in.Name) > 200 || strings.TrimSpace(in.Provider) == "" || len(in.Provider) > 100 || !safeToken.MatchString(in.ModelID) || len(in.ModelID) > 200 || in.ContextWindow < 1 || in.ContextWindow > 100000000 || len(in.CredentialRef) > 500 {
+	if len(in.APIKey) > maxModelAPIKeyBytes || strings.TrimSpace(in.Name) == "" || len(in.Name) > 200 || strings.TrimSpace(in.Provider) == "" || len(in.Provider) > 100 || !safeToken.MatchString(in.ModelID) || len(in.ModelID) > 200 || in.ContextWindow < 1 || in.ContextWindow > 100000000 || len(in.CredentialRef) > 500 {
 		return errors.New("invalid model fields")
 	}
 	baseURL := strings.TrimSpace(in.BaseURL)

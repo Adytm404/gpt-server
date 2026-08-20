@@ -40,6 +40,30 @@ describe('admin DTO mapping', () => {
     expect(modelToInput({ ...modelFromDTO(modelResponse), credentialRef: ' vault://models/provider ' })).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000, base_url: 'https://api.example.com/v1', credential_ref: 'vault://models/provider' })
   })
 
+  it('posts exact draft test fields including a nonblank API key', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ success: true, latency_ms: 84 }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    await adminApi.testModelDraft({ ...modelFromDTO(modelResponse), apiKey: ' sk-test-secret ', credentialRef: ' vault://models/provider ' })
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/api\/v1\/admin\/models\/test$/)
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(String(init?.body))).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000, base_url: 'https://api.example.com/v1', api_key: 'sk-test-secret', credential_ref: 'vault://models/provider' })
+  })
+
+  it('omits API key from draft tests when blank', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ success: true, latency_ms: 12 }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    await adminApi.testModelDraft({ ...modelFromDTO(modelResponse), apiKey: '   ' })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000, base_url: 'https://api.example.com/v1' })
+  })
+
+  it('tests a saved model by ID without a body', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ success: true, latency_ms: 21 }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    await adminApi.testSavedModel('model/uuid')
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(String(url)).toMatch(/\/api\/v1\/admin\/models\/model%2Fuuid\/test$/)
+    expect(init?.method).toBe('POST')
+    expect(init?.body).toBeUndefined()
+  })
+
   it('deduplicates plan revisions by plan id and prefers draft', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ plans: [planResponse, { ...planResponse, name: 'Draft Control', status: 'draft' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     await expect(adminApi.listPlans()).resolves.toEqual([expect.objectContaining({ id: 'plan-uuid', name: 'Draft Control', status: 'Draft' })])

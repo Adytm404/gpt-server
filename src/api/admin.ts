@@ -68,7 +68,15 @@ export type Model = {
   id: string; modelId?: string; name: string; provider: string; context: string
   baseUrl: string
   status: 'Active' | 'Disabled'; fallback: boolean
-  credentialConfigured?: boolean; credentialRef?: string
+  credentialConfigured?: boolean; credentialRef?: string; apiKey?: string
+}
+
+export type ModelTestResult = {
+  success?: boolean
+  status?: string
+  latency_ms?: number
+  message?: string
+  error?: string
 }
 
 export type Plan = {
@@ -83,7 +91,7 @@ export function modelFromDTO(dto: ModelDTO): Model {
 }
 
 export function modelToInput(model: Model): ModelInput {
-  return { name: model.name, provider: model.provider, model_id: model.modelId || '', context_window: parseTokens(model.context), base_url: model.baseUrl, ...(model.credentialRef?.trim() ? { credential_ref: model.credentialRef.trim() } : {}) }
+  return { name: model.name, provider: model.provider, model_id: model.modelId || '', context_window: parseTokens(model.context), base_url: model.baseUrl, ...(model.apiKey?.trim() ? { api_key: model.apiKey.trim() } : {}), ...(model.credentialRef?.trim() ? { credential_ref: model.credentialRef.trim() } : {}) }
 }
 
 export function planFromDTO(dto: PlanDTO): Plan {
@@ -112,6 +120,8 @@ export const adminApi = {
   },
   async setFallback(id: string) { return apiRequest<void>(`/api/v1/admin/models/${encodeURIComponent(id)}/fallback`, { method: 'POST' }) },
   async setModelStatus(id: string, status: ModelDTO['status']) { return apiRequest<void>(`/api/v1/admin/models/${encodeURIComponent(id)}/${status === 'active' ? 'enable' : 'disable'}`, { method: 'POST' }) },
+  async testModelDraft(model: Model) { return apiRequest<ModelTestResult>('/api/v1/admin/models/test', { method: 'POST', body: json(modelToInput(model)) }) },
+  async testSavedModel(id: string) { return apiRequest<ModelTestResult>(`/api/v1/admin/models/${encodeURIComponent(id)}/test`, { method: 'POST' }) },
   async listPlans() {
     const plans = unwrapList<PlanDTO>(await apiRequest('/api/v1/admin/plans'), 'plans').map(planFromDTO)
     return [...plans.reduce((byId, plan) => {

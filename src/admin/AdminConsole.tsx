@@ -23,6 +23,7 @@ import {
   Copy,
   Edit3,
   Eye,
+  EyeOff,
   Gauge,
   Layers3,
   Plus,
@@ -67,6 +68,12 @@ const notify = (text: string) =>
   window.dispatchEvent(
     new CustomEvent<string>("opsai:toast", { detail: text }),
   );
+const testSuccess = (result: { success?: boolean; status?: string; latency_ms?: number; message?: string; error?: string }) => {
+  if (result.success === false || result.status === "error" || result.status === "failed") {
+    throw new Error(result.error || result.message || "Connection test failed");
+  }
+  return `Connection successful${typeof result.latency_ms === "number" ? ` (${result.latency_ms} ms)` : ""}`;
+};
 
 export default function AdminConsole() {
   return (
@@ -202,6 +209,7 @@ function ModelsPage() {
   } = useLoad(loader, [] as Model[]);
   const [drawer, setDrawer] = useState<Model | "new" | null>(null);
   const [query, setQuery] = useState("");
+  const [testingID, setTestingID] = useState("");
   const filtered = models.filter((model) =>
     `${model.name} ${model.provider}`
       .toLowerCase()
@@ -215,6 +223,17 @@ function ModelsPage() {
       notify(success);
     } catch (caught) {
       setError(message(caught));
+    }
+  };
+  const testSaved = async (model: Model) => {
+    setError("");
+    setTestingID(model.id);
+    try {
+      notify(testSuccess(await adminApi.testSavedModel(model.id)));
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setTestingID("");
     }
   };
   return (
@@ -302,6 +321,14 @@ function ModelsPage() {
                 </span>
                 <div className="admin-row-actions">
                   <button
+                    type="button"
+                    className="action-text"
+                    disabled={Boolean(testingID)}
+                    onClick={() => void testSaved(model)}
+                  >
+                    {testingID === model.id ? "Testing..." : "Test connection"}
+                  </button>
+                  <button
                     title="Set fallback"
                     disabled={model.status === "Disabled"}
                     onClick={() =>
@@ -382,15 +409,36 @@ function ModelDrawer({
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [showKey, setShowKey] = useState(false);
+  const [busyAction, setBusyAction] = useState<"test" | "test-save" | "save" | "">("");
+  const busy = Boolean(busyAction);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    setBusyAction("save");
     setSaving(true);
     setError("");
+    setSuccess("");
     try {
       await save(draft);
     } catch (caught) {
       setError(message(caught));
       setSaving(false);
+      setBusyAction("");
+    }
+  };
+  const test = async (saveAfter: boolean) => {
+    setBusyAction(saveAfter ? "test-save" : "test");
+    setError("");
+    setSuccess("");
+    try {
+      setSuccess(testSuccess(await adminApi.testModelDraft(draft)));
+      if (saveAfter) await save(draft);
+    } catch (caught) {
+      setError(message(caught));
+      setBusyAction("");
+    } finally {
+      if (!saveAfter) setBusyAction("");
     }
   };
   return (
@@ -480,6 +528,30 @@ function ModelDrawer({
               <small>Plans can select this model when active.</small>
             </span>
           </label>
+          <label htmlFor="model-api-key">
+            <span>API key (optional)</span>
+            <div className="secret-input">
+              <input
+                id="model-api-key"
+                aria-label="API key (optional)"
+                type={showKey ? "text" : "password"}
+                value={draft.apiKey || ""}
+                placeholder="sk-..."
+                autoComplete="new-password"
+                onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
+              />
+              <button
+                type="button"
+                aria-label={showKey ? "Hide API key" : "Reveal API key"}
+                onClick={() => setShowKey((current) => !current)}
+              >
+                {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+            <small>
+              Sent to the backend for encrypted storage. Leave blank for a keyless/local endpoint. Existing configured key is never displayed.
+            </small>
+          </label>
           <label>
             <span>Credential reference (optional)</span>
             <input
@@ -488,7 +560,7 @@ function ModelDrawer({
               placeholder="vault://models/openai"
             />
             <small>
-              Credential reference points to a server-side secret and is not an API key.
+              Alternative server-side secret reference, used instead of entering an API key here.
             </small>
             {draft.credentialConfigured && <small>Credential currently configured. Leave unchanged to preserve it.</small>}
           </label>
@@ -497,12 +569,23 @@ function ModelDrawer({
               {error}
             </div>
           )}
+          {success && (
+            <div className="inline-api-success" role="status">
+              <CheckCircle2 size={14} /> {success}
+            </div>
+          )}
         </div>
         <footer>
-          <button type="button" className="button secondary" onClick={close}>
+          <button type="button" className="button secondary" onClick={close} disabled={busy}>
             Cancel
           </button>
-          <button className="button dark" disabled={saving}>
+          <button type="button" className="button secondary" disabled={busy} onClick={() => void test(false)}>
+            {busyAction === "test" ? "Testing..." : "Test connection"}
+          </button>
+          <button type="button" className="button secondary" disabled={busy} onClick={() => void test(true)}>
+            {busyAction === "test-save" ? "Testing..." : "Test & save"}
+          </button>
+          <button className="button dark" disabled={busy}>
             <Save size={14} /> {saving ? "Saving..." : "Save model"}
           </button>
         </footer>

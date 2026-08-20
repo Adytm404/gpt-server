@@ -69,8 +69,11 @@ func TestValidateModelInput(t *testing.T) {
 	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "bad model", BaseURL: "https://api.openai.com/v1", ContextWindow: 1}); err == nil {
 		t.Fatal("invalid external model ID accepted")
 	}
-	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", BaseURL: "https://api.openai.com/v1", ContextWindow: 1, APIKey: "secret"}); err == nil {
-		t.Fatal("api_key accepted without secure storage")
+	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", BaseURL: "https://api.openai.com/v1", ContextWindow: 1, APIKey: "secret"}); err != nil {
+		t.Fatalf("api_key rejected: %v", err)
+	}
+	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", BaseURL: "https://api.openai.com/v1", ContextWindow: 1, APIKey: strings.Repeat("x", maxModelAPIKeyBytes+1)}); err == nil {
+		t.Fatal("oversized api_key accepted")
 	}
 	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", BaseURL: "https://api.openai.com/v1", ContextWindow: 1, CredentialRef: "vault://models/gpt"}); err != nil {
 		t.Fatalf("credential_ref rejected: %v", err)
@@ -122,7 +125,7 @@ func TestLegacySyntheticFieldsAreNotSerialized(t *testing.T) {
 	}
 }
 
-func TestModelTestRouteIsUnavailable(t *testing.T) {
+func TestModelTestRouteRequiresCSRF(t *testing.T) {
 	s := &server{cfg: config{frontendOrigin: "https://app.example.com"}, resolveSession: func(context.Context, string) (sessionAuth, error) {
 		return sessionAuth{UserID: uuid.New(), WorkspaceID: uuid.New(), PlatformRole: "admin", WorkspaceRole: "owner"}, nil
 	}}
@@ -133,11 +136,8 @@ func TestModelTestRouteIsUnavailable(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: csrfCookie, Value: "token"})
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("model test route status = %d, want 404 or 405; body=%s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), `"stub"`) {
-		t.Fatalf("model test response retains stub field: %s", rec.Body.String())
+	if rec.Code == http.StatusNotFound || rec.Code == http.StatusMethodNotAllowed {
+		t.Fatalf("saved model test route unavailable: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

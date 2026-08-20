@@ -42,6 +42,7 @@ type config struct {
 	addr, frontendOrigin                              string
 	dbHost, dbPort, dbUser, dbName, dbPassword, dbSSL string
 	serverKeyEncryptionKey                            string
+	modelKeyEncryptionKey                             string
 	sessionTTL                                        time.Duration
 	cookieSecure                                      bool
 }
@@ -148,6 +149,7 @@ func loadConfig() (config, error) {
 		dbPassword:             os.Getenv("DB_PASSWORD"),
 		dbSSL:                  env("DB_SSLMODE", "disable"),
 		serverKeyEncryptionKey: os.Getenv("SERVER_KEY_ENCRYPTION_KEY"),
+		modelKeyEncryptionKey:  os.Getenv("MODEL_KEY_ENCRYPTION_KEY"),
 	}
 	var err error
 	cfg.sessionTTL, err = time.ParseDuration(env("SESSION_TTL", "720h"))
@@ -160,6 +162,12 @@ func loadConfig() (config, error) {
 	cfg.cookieSecure, err = strconv.ParseBool(env("COOKIE_SECURE", "false"))
 	if err != nil {
 		return config{}, errors.New("COOKIE_SECURE must be true or false")
+	}
+	if cfg.modelKeyEncryptionKey != "" {
+		key, decodeErr := base64.StdEncoding.DecodeString(cfg.modelKeyEncryptionKey)
+		if decodeErr != nil || len(key) != 32 {
+			return config{}, errors.New("MODEL_KEY_ENCRYPTION_KEY must be base64-encoded 32 bytes when set")
+		}
 	}
 	origin, err := url.Parse(cfg.frontendOrigin)
 	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.User != nil {

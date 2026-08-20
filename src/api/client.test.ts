@@ -17,6 +17,14 @@ describe('apiRequest', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: 'not allowed', request_id: 'req-7' }), { status: 403, headers: { 'Content-Type': 'application/json' } }))
     await expect(apiRequest('/api/v1/admin/models')).rejects.toEqual(expect.objectContaining({ message: 'not allowed', status: 403, requestId: 'req-7' }))
   })
+
+  it('explains how to start an unreachable backend', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+    await expect(apiRequest('/api/v1/admin/models')).rejects.toEqual(expect.objectContaining({
+      message: 'Cannot reach backend at http://localhost:8080. Start it with cd backend && go run .',
+      status: 0,
+    }))
+  })
 })
 
 describe('unwrapOne', () => {

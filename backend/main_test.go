@@ -90,3 +90,14 @@ func TestLogoutRejectsMissingCSRF(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusForbidden)
 	}
 }
+
+func TestModelEncryptionKeyConfigIsOptionalButValidated(t *testing.T) {
+	t.Setenv("MODEL_KEY_ENCRYPTION_KEY", "")
+	if _, err := loadConfig(); err != nil {
+		t.Fatalf("missing optional model key rejected: %v", err)
+	}
+	t.Setenv("MODEL_KEY_ENCRYPTION_KEY", "invalid")
+	if _, err := loadConfig(); err == nil || !strings.Contains(err.Error(), "MODEL_KEY_ENCRYPTION_KEY") {
+		t.Fatalf("invalid model key error = %v", err)
+	}
+}

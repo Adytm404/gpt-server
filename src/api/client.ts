@@ -32,7 +32,10 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   try {
     response = await fetch(`${API_URL}${path}`, { ...init, method, headers, credentials: 'include' })
   } catch (error) {
-    throw new ApiError(error instanceof Error ? error.message : 'Network request failed', 0)
+    const detail = error instanceof Error ? error.message : 'Network request failed'
+    throw new ApiError(detail === 'Failed to fetch'
+      ? `Cannot reach backend at ${API_URL}. Start it with cd backend && go run .`
+      : detail, 0)
   }
 
   if (!response.ok) {
