@@ -14,8 +14,8 @@ export type ServerDTO = {
   id: string; name: string; host: string; port: number; ssh_user: string
   auth_method: 'ssh_key' | 'password'
   environment: 'production' | 'staging' | 'development'; status: 'online' | 'offline' | 'unknown'
-  region: string; operating_system?: string; uptime?: string; host_fingerprint: string
-  latest_snapshot?: { cpu_percent: number; memory_percent: number; disk_percent: number; captured_at?: string; checked_at?: string } | null
+  region: string; operating_system?: string; uptime?: string; uptime_seconds?: number; host_fingerprint: string
+  latest_snapshot?: { cpu_percent: number; memory_percent: number; disk_percent: number; captured_at?: string; checked_at?: string; services?: Array<{ name: string; status: string; detail?: string }> } | null
   services?: Array<{ name: string; status: string; detail?: string }>
 }
 
@@ -23,9 +23,20 @@ export type ServerSummaryDTO = { total: number; online: number; offline: number;
 export type CreateServerDTO = { name: string; host: string; port: number; username: string; auth_method: 'ssh_key' | 'password'; password?: string; private_key?: string; host_fingerprint?: string; environment: string; region?: string }
 export type ConnectionTestResult = { ok: boolean; message: string; authMethod?: 'ssh_key' | 'password'; latencyMs?: number }
 
+export function formatUptime(seconds: number): string {
+  const totalMinutes = Math.floor(Math.max(0, seconds) / 60)
+  const days = Math.floor(totalMinutes / 1440)
+  const hours = Math.floor((totalMinutes % 1440) / 60)
+  const minutes = totalMinutes % 60
+  if (days) return `${days}d${hours ? ` ${hours}h` : minutes ? ` ${minutes}m` : ''}`
+  if (hours) return `${hours}h${minutes ? ` ${minutes}m` : ''}`
+  return `${minutes}m`
+}
+
 export function serverFromDTO(dto: ServerDTO): Server {
   const title = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
-  return { id: dto.id, name: dto.name, host: dto.host, port: dto.port, username: dto.ssh_user, authMethod: dto.auth_method || 'ssh_key', environment: title(dto.environment) as Server['environment'], status: title(dto.status) as ServerStatus, region: dto.region || '-', operatingSystem: dto.operating_system || '-', uptime: dto.uptime || '-', fingerprint: dto.host_fingerprint || '', latestSnapshot: dto.latest_snapshot ? { cpuPercent: dto.latest_snapshot.cpu_percent, memoryPercent: dto.latest_snapshot.memory_percent, diskPercent: dto.latest_snapshot.disk_percent, capturedAt: dto.latest_snapshot.captured_at || dto.latest_snapshot.checked_at || '' } : null, services: (dto.services || []).map(service => ({ ...service, detail: service.detail || '' })) }
+  const services = dto.latest_snapshot?.services ?? dto.services ?? []
+  return { id: dto.id, name: dto.name, host: dto.host, port: dto.port, username: dto.ssh_user, authMethod: dto.auth_method || 'ssh_key', environment: title(dto.environment) as Server['environment'], status: title(dto.status) as ServerStatus, region: dto.region || '-', operatingSystem: dto.operating_system || '-', uptime: dto.uptime_seconds == null ? dto.uptime || '-' : formatUptime(dto.uptime_seconds), fingerprint: dto.host_fingerprint || '', latestSnapshot: dto.latest_snapshot ? { cpuPercent: dto.latest_snapshot.cpu_percent, memoryPercent: dto.latest_snapshot.memory_percent, diskPercent: dto.latest_snapshot.disk_percent, capturedAt: dto.latest_snapshot.captured_at || dto.latest_snapshot.checked_at || '' } : null, services: services.map(service => ({ ...service, detail: service.detail || '' })) }
 }
 
 function serverInput(input: CreateServerDTO) {

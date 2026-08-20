@@ -1,18 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +33,8 @@ type serverResponse struct {
 	SSHUser              string                  `json:"ssh_user"`
 	Environment          string                  `json:"environment"`
 	Region               string                  `json:"region"`
+	OperatingSystem      string                  `json:"operating_system"`
+	UptimeSeconds        *int64                  `json:"uptime_seconds"`
 	HostFingerprint      string                  `json:"host_fingerprint"`
 	AuthMethod           string                  `json:"auth_method"`
 	CredentialConfigured bool                    `json:"credential_configured"`
@@ -41,20 +47,27 @@ type serverResponse struct {
 }
 
 type healthSnapshotResponse struct {
-	Status        string    `json:"status"`
-	LatencyMS     int       `json:"latency_ms"`
-	CPUPercent    float64   `json:"cpu_percent"`
-	MemoryPercent float64   `json:"memory_percent"`
-	DiskPercent   float64   `json:"disk_percent"`
-	Error         string    `json:"error,omitempty"`
-	CapturedAt    time.Time `json:"captured_at"`
+	Status        string                  `json:"status"`
+	LatencyMS     int                     `json:"latency_ms"`
+	CPUPercent    float64                 `json:"cpu_percent"`
+	MemoryPercent float64                 `json:"memory_percent"`
+	DiskPercent   float64                 `json:"disk_percent"`
+	Services      []serviceHealthResponse `json:"services"`
+	Details       map[string]any          `json:"details"`
+	Error         string                  `json:"error,omitempty"`
+	CapturedAt    time.Time               `json:"captured_at"`
 }
 
-const serverColumns = `id,name,host,port,ssh_user,environment,region,host_fingerprint,auth_method,CASE WHEN auth_method='password' THEN password_ciphertext IS NOT NULL ELSE private_key_ciphertext IS NOT NULL END,status,last_error,last_checked_at,created_at,updated_at`
+type serviceHealthResponse struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+const serverColumns = `id,name,host,port,ssh_user,environment,region,operating_system,uptime_seconds,host_fingerprint,auth_method,CASE WHEN auth_method='password' THEN password_ciphertext IS NOT NULL ELSE private_key_ciphertext IS NOT NULL END,status,last_error,last_checked_at,created_at,updated_at`
 
 func scanServer(row pgx.Row) (serverResponse, error) {
 	var out serverResponse
-	err := row.Scan(&out.ID, &out.Name, &out.Host, &out.Port, &out.SSHUser, &out.Environment, &out.Region, &out.HostFingerprint, &out.AuthMethod, &out.CredentialConfigured, &out.Status, &out.LastError, &out.LastCheckedAt, &out.CreatedAt, &out.UpdatedAt)
+	err := row.Scan(&out.ID, &out.Name, &out.Host, &out.Port, &out.SSHUser, &out.Environment, &out.Region, &out.OperatingSystem, &out.UptimeSeconds, &out.HostFingerprint, &out.AuthMethod, &out.CredentialConfigured, &out.Status, &out.LastError, &out.LastCheckedAt, &out.CreatedAt, &out.UpdatedAt)
 	return out, err
 }
 
@@ -319,37 +332,61 @@ func (s *server) healthServer(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var host string
-	var port int
-	err := s.db.QueryRow(r.Context(), `SELECT host,port FROM servers WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL`, id, authFrom(r.Context()).WorkspaceID).Scan(&host, &port)
+	var target sshConnectionTarget
+	var ciphertext []byte
+	err := s.db.QueryRow(r.Context(), `SELECT host,port,ssh_user,auth_method,host_fingerprint,CASE WHEN auth_method='password' THEN password_ciphertext ELSE private_key_ciphertext END FROM servers WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL`, id, authFrom(r.Context()).WorkspaceID).Scan(&target.Host, &target.Port, &target.SSHUser, &target.AuthMethod, &target.HostFingerprint, &ciphertext)
 	if err != nil {
 		s.dbError(w, r, err)
 		return
 	}
-	started := time.Now()
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-	defer cancel()
-	dialer := net.Dialer{}
-	conn, dialErr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprint(port)))
-	if dialErr == nil {
-		_ = conn.Close()
+	status, lastError := "offline", "server credential unavailable"
+	result := offlineSSHResult(target, lastError)
+	var inventory healthInventory
+	if secret, decryptErr := decryptServerCredential(s.cfg.serverKeyEncryptionKey, ciphertext); decryptErr == nil {
+		ctx, cancel := context.WithTimeout(r.Context(), normalizedSSHTimeout(s.cfg.sshConnectTimeout))
+		client, connectionResult, connectErr := dialAuthenticatedSSH(ctx, target, secret)
+		result = connectionResult
+		if connectErr == nil {
+			inventory, err = collectHealthInventory(ctx, client)
+			_ = client.Close()
+			if err == nil {
+				status, lastError = "online", ""
+			} else {
+				lastError = sanitizeSSHError(err.Error())
+			}
+		} else {
+			lastError = result.Error
+		}
+		cancel()
 	}
-	latency := int(time.Since(started).Milliseconds())
-	status, lastError := "online", ""
-	if dialErr != nil {
-		status, lastError = "offline", sanitizeSSHError(dialErr.Error())
+	lastError = sanitizeSSHError(lastError)
+	services := inventory.Services
+	if services == nil {
+		services = []serviceHealthResponse{}
 	}
+	details := map[string]any{}
+	if status == "online" {
+		details["collector"] = "linux_procfs"
+	} else {
+		details["error"] = lastError
+	}
+	servicesJSON, _ := json.Marshal(services)
+	detailsJSON, _ := json.Marshal(details)
 	tx, err := s.db.Begin(r.Context())
-	var snapshot *healthSnapshotResponse
+	var out serverResponse
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `UPDATE servers SET status=$3,last_error=$4,last_checked_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2`, id, authFrom(r.Context()).WorkspaceID, status, lastError)
+		fingerprint := target.HostFingerprint
+		if status == "online" && fingerprint == "" {
+			fingerprint = result.HostFingerprint
+		}
+		out, err = scanServer(tx.QueryRow(r.Context(), `UPDATE servers SET status=$3,last_error=$4,last_checked_at=now(),operating_system=CASE WHEN $3='online' THEN $5 ELSE operating_system END,uptime_seconds=CASE WHEN $3='online' THEN $6 ELSE uptime_seconds END,host_fingerprint=$7,updated_at=now() WHERE id=$1 AND workspace_id=$2 RETURNING `+serverColumns, id, authFrom(r.Context()).WorkspaceID, status, lastError, inventory.OperatingSystem, inventory.UptimeSeconds, fingerprint))
 	}
 	if err == nil {
-		snapshot = &healthSnapshotResponse{Status: status, LatencyMS: latency, Error: lastError}
-		err = tx.QueryRow(r.Context(), `INSERT INTO server_health_snapshots(id,server_id,status,latency_ms,cpu_percent,memory_percent,disk_percent,error) VALUES($1,$2,$3,$4,0,0,0,$5) RETURNING checked_at`, uuid.New(), id, status, latency, lastError).Scan(&snapshot.CapturedAt)
+		out.LatestSnapshot = &healthSnapshotResponse{Status: status, LatencyMS: result.LatencyMS, CPUPercent: inventory.CPUPercent, MemoryPercent: inventory.MemoryPercent, DiskPercent: inventory.DiskPercent, Services: services, Details: details, Error: lastError}
+		err = tx.QueryRow(r.Context(), `INSERT INTO server_health_snapshots(id,server_id,status,latency_ms,cpu_percent,memory_percent,disk_percent,services,details,error) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10) RETURNING checked_at`, uuid.New(), id, status, result.LatencyMS, inventory.CPUPercent, inventory.MemoryPercent, inventory.DiskPercent, string(servicesJSON), string(detailsJSON), lastError).Scan(&out.LatestSnapshot.CapturedAt)
 	}
 	if err == nil {
-		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "servers", "Server health checked", id, host, map[string]any{"status": status, "latency_ms": latency, "tcp_only": true})
+		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "servers", "Server health checked", id, target.Host, map[string]any{"status": status, "latency_ms": result.LatencyMS, "auth_method": target.AuthMethod})
 	}
 	if err == nil {
 		err = tx.Commit(r.Context())
@@ -360,7 +397,7 @@ func (s *server) healthServer(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, r, err)
 		return
 	}
-	s.writeJSON(w, 200, map[string]any{"snapshot": snapshot, "tcp_only": true})
+	s.writeJSON(w, 200, out)
 }
 
 func summarizeServers(servers []serverResponse) map[string]int {
@@ -378,7 +415,7 @@ func summarizeServers(servers []serverResponse) map[string]int {
 
 func (s *server) latestSnapshot(ctx context.Context, serverID uuid.UUID) (*healthSnapshotResponse, error) {
 	var snapshot healthSnapshotResponse
-	err := s.db.QueryRow(ctx, `SELECT status,latency_ms,cpu_percent,memory_percent,disk_percent,error,checked_at FROM server_health_snapshots WHERE server_id=$1 ORDER BY checked_at DESC LIMIT 1`, serverID).Scan(&snapshot.Status, &snapshot.LatencyMS, &snapshot.CPUPercent, &snapshot.MemoryPercent, &snapshot.DiskPercent, &snapshot.Error, &snapshot.CapturedAt)
+	err := s.db.QueryRow(ctx, `SELECT status,latency_ms,cpu_percent,memory_percent,disk_percent,services,details,error,checked_at FROM server_health_snapshots WHERE server_id=$1 ORDER BY checked_at DESC LIMIT 1`, serverID).Scan(&snapshot.Status, &snapshot.LatencyMS, &snapshot.CPUPercent, &snapshot.MemoryPercent, &snapshot.DiskPercent, &snapshot.Services, &snapshot.Details, &snapshot.Error, &snapshot.CapturedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -455,6 +492,14 @@ func offlineSSHResult(target sshConnectionTarget, message string) sshConnectionR
 }
 
 func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret string) sshConnectionResult {
+	client, result, err := dialAuthenticatedSSH(ctx, target, secret)
+	if err == nil {
+		_ = client.Close()
+	}
+	return result
+}
+
+func dialAuthenticatedSSH(ctx context.Context, target sshConnectionTarget, secret string) (*ssh.Client, sshConnectionResult, error) {
 	started := time.Now()
 	result := offlineSSHResult(target, "SSH connection failed")
 	var auth ssh.AuthMethod
@@ -464,7 +509,7 @@ func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret s
 		signer, err := ssh.ParsePrivateKey([]byte(secret))
 		if err != nil {
 			result.Error = "invalid SSH private key"
-			return result
+			return nil, result, err
 		}
 		auth = ssh.PublicKeys(signer)
 	}
@@ -495,9 +540,8 @@ func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret s
 			result.Error = sanitizeSSHError(err.Error())
 		}
 		result.LatencyMS = int(time.Since(started).Milliseconds())
-		return result
+		return nil, result, err
 	}
-	defer conn.Close()
 	deadline := time.Now().Add(connectTimeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
@@ -509,19 +553,208 @@ func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret s
 		result.HostFingerprint = observed
 	}
 	if err != nil {
+		_ = conn.Close()
 		if isTimeoutError(ctx, err) {
 			result.Error = "SSH handshake timed out"
 		} else {
 			result.Error = sanitizeSSHError(err.Error())
 		}
-		return result
+		return nil, result, err
 	}
 	client := ssh.NewClient(clientConn, channels, requests)
-	_ = client.Close()
 	result.Status = "online"
 	result.Error = ""
 	result.FingerprintVerified = target.HostFingerprint != "" && observed == target.HostFingerprint
-	return result
+	return client, result, nil
+}
+
+const maxHealthOutputBytes = 256 * 1024
+
+const healthInventoryCommand = `sh -c '
+os=""
+if [ -r /etc/os-release ]; then
+  while IFS="=" read -r key value; do
+    if [ "$key" = "PRETTY_NAME" ]; then os="$value"; break; fi
+  done < /etc/os-release
+  os=${os#\"}; os=${os%\"}
+fi
+if [ -z "$os" ]; then os=$(uname -srm 2>/dev/null || uname -a); fi
+printf "operating_system=%s\n" "$os"
+if [ -r /proc/uptime ]; then read -r uptime rest < /proc/uptime; else uptime=0; fi
+printf "uptime_seconds=%s\n" "${uptime%%.*}"
+if [ -r /proc/stat ]; then read -r cpu a b c d e f g h rest < /proc/stat; printf "cpu1=%s %s %s %s %s %s %s %s\n" "$a" "$b" "$c" "$d" "$e" "$f" "$g" "$h"; sleep 0.25; read -r cpu a b c d e f g h rest < /proc/stat; printf "cpu2=%s %s %s %s %s %s %s %s\n" "$a" "$b" "$c" "$d" "$e" "$f" "$g" "$h"; fi
+if [ -r /proc/meminfo ]; then
+  while read -r key value unit; do case "$key" in MemTotal:) printf "memory_total_kb=%s\n" "$value";; MemAvailable:) printf "memory_available_kb=%s\n" "$value";; esac; done < /proc/meminfo
+fi
+set -- $(df -P / 2>/dev/null | tail -n 1); printf "disk_percent=%s\n" "$5"
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --failed --no-legend --no-pager --plain 2>/dev/null | while read -r unit load active sub rest; do [ -n "$unit" ] && printf "service=%s|failed\n" "$unit"; done
+  for unit in ssh sshd; do state=$(systemctl is-active "$unit" 2>/dev/null || true); [ "$state" != "unknown" ] && [ -n "$state" ] && printf "service=%s|%s\n" "$unit" "$state"; done
+fi
+'`
+
+type healthInventory struct {
+	OperatingSystem string
+	UptimeSeconds   int64
+	CPUPercent      float64
+	MemoryPercent   float64
+	DiskPercent     float64
+	Services        []serviceHealthResponse
+}
+
+type limitedHealthBuffer struct {
+	mu       sync.Mutex
+	buffer   bytes.Buffer
+	exceeded bool
+}
+
+func (b *limitedHealthBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := maxHealthOutputBytes - b.buffer.Len()
+	if remaining <= 0 {
+		b.exceeded = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		b.exceeded = true
+		_, _ = b.buffer.Write(p[:remaining])
+		return len(p), nil
+	}
+	return b.buffer.Write(p)
+}
+
+func (b *limitedHealthBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Len()
+}
+
+func (b *limitedHealthBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
+func collectHealthInventory(ctx context.Context, client *ssh.Client) (healthInventory, error) {
+	session, err := client.NewSession()
+	if err != nil {
+		return healthInventory{}, err
+	}
+	defer session.Close()
+	var output limitedHealthBuffer
+	session.Stdout = &output
+	session.Stderr = &output
+	done := make(chan error, 1)
+	go func() { done <- session.Run(healthInventoryCommand) }()
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		_ = session.Close()
+		<-done
+		return healthInventory{}, errors.New("SSH health command timed out")
+	}
+	if output.exceeded {
+		return healthInventory{}, errors.New("SSH health output limit exceeded")
+	}
+	if err != nil {
+		return healthInventory{}, fmt.Errorf("SSH health command failed: %w", err)
+	}
+	return parseHealthInventory(output.String())
+}
+
+func parseHealthInventory(output string) (healthInventory, error) {
+	values := map[string]string{}
+	services := []serviceHealthResponse{}
+	for _, line := range strings.Split(output, "\n") {
+		key, value, found := strings.Cut(strings.TrimSpace(line), "=")
+		if !found {
+			continue
+		}
+		if key == "service" {
+			name, status, valid := strings.Cut(value, "|")
+			if valid && name != "" && status != "" {
+				services = append(services, serviceHealthResponse{Name: name, Status: status})
+			}
+			continue
+		}
+		values[key] = value
+	}
+	uptime, err := strconv.ParseInt(values["uptime_seconds"], 10, 64)
+	if err != nil || uptime < 0 {
+		return healthInventory{}, errors.New("invalid uptime in SSH health output")
+	}
+	operatingSystem := strings.TrimSpace(values["operating_system"])
+	if operatingSystem == "" {
+		return healthInventory{}, errors.New("missing operating system in SSH health output")
+	}
+	cpu, err := cpuPercent(values["cpu1"], values["cpu2"])
+	if err != nil {
+		return healthInventory{}, err
+	}
+	total, err := strconv.ParseFloat(values["memory_total_kb"], 64)
+	if err != nil || total <= 0 {
+		return healthInventory{}, errors.New("invalid memory total in SSH health output")
+	}
+	available, err := strconv.ParseFloat(values["memory_available_kb"], 64)
+	if err != nil {
+		return healthInventory{}, errors.New("invalid memory available in SSH health output")
+	}
+	disk, err := strconv.ParseFloat(strings.TrimSuffix(values["disk_percent"], "%"), 64)
+	if err != nil {
+		return healthInventory{}, errors.New("invalid disk usage in SSH health output")
+	}
+	return healthInventory{
+		OperatingSystem: operatingSystem,
+		UptimeSeconds:   uptime,
+		CPUPercent:      roundedPercent(cpu),
+		MemoryPercent:   roundedPercent((total - available) / total * 100),
+		DiskPercent:     roundedPercent(disk),
+		Services:        services,
+	}, nil
+}
+
+func cpuPercent(first, second string) (float64, error) {
+	parse := func(value string) ([]float64, error) {
+		fields := strings.Fields(value)
+		if len(fields) < 4 {
+			return nil, errors.New("invalid CPU sample in SSH health output")
+		}
+		out := make([]float64, len(fields))
+		for i, field := range fields {
+			var err error
+			out[i], err = strconv.ParseFloat(field, 64)
+			if err != nil {
+				return nil, errors.New("invalid CPU sample in SSH health output")
+			}
+		}
+		return out, nil
+	}
+	a, err := parse(first)
+	if err != nil {
+		return 0, err
+	}
+	b, err := parse(second)
+	if err != nil || len(a) != len(b) {
+		return 0, errors.New("invalid CPU sample in SSH health output")
+	}
+	var totalDelta float64
+	for i := range a {
+		totalDelta += b[i] - a[i]
+	}
+	idleDelta := b[3] - a[3]
+	if len(a) > 4 {
+		idleDelta += b[4] - a[4]
+	}
+	if totalDelta <= 0 {
+		return 0, errors.New("invalid CPU delta in SSH health output")
+	}
+	return (totalDelta - idleDelta) / totalDelta * 100, nil
+}
+
+func roundedPercent(value float64) float64 {
+	value = math.Max(0, math.Min(100, value))
+	return math.Round(value*10) / 10
 }
 
 func normalizedSSHTimeout(timeout time.Duration) time.Duration {

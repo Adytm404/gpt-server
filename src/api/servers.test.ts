@@ -13,6 +13,24 @@ it.each([
 })
 
 it.each([
+  [174600, '2d 30m'],
+  [174600 + (12 * 60 * 60), '2d 12h'],
+  [7500, '2h 5m'],
+  [2700, '45m'],
+])('formats %i uptime seconds as %s', (uptimeSeconds, expected) => {
+  expect(serverFromDTO({ ...base, uptime_seconds: uptimeSeconds }).uptime).toBe(expected)
+})
+
+it('maps services from latest snapshot with top-level fallback', () => {
+  const snapshotServices = [{ name: 'nginx', status: 'running' }]
+  const topLevelServices = [{ name: 'postgres', status: 'running', detail: 'primary' }]
+
+  expect(serverFromDTO({ ...base, latest_snapshot: { cpu_percent: 1, memory_percent: 2, disk_percent: 3, services: snapshotServices }, services: topLevelServices }).services)
+    .toEqual([{ ...snapshotServices[0], detail: '' }])
+  expect(serverFromDTO({ ...base, services: topLevelServices }).services).toEqual(topLevelServices)
+})
+
+it.each([
   { auth_method: 'ssh_key' as const, credentials: { private_key: 'secret-key', password: 'discard-me' }, included: 'private_key' as const, excluded: 'password' as const },
   { auth_method: 'password' as const, credentials: { password: 'secret-password', private_key: 'discard-me' }, included: 'password' as const, excluded: 'private_key' as const },
 ])('sends only selected $auth_method credential when testing a draft', async ({ auth_method, credentials, included, excluded }) => {

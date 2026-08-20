@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,29 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestServerInventoryMigration(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/009_server_inventory.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{
+		"ADD COLUMN IF NOT EXISTS operating_system text NOT NULL DEFAULT ''",
+		"ADD COLUMN IF NOT EXISTS uptime_seconds bigint",
+		"ADD COLUMN IF NOT EXISTS disk_percent",
+		"ADD COLUMN IF NOT EXISTS services jsonb NOT NULL DEFAULT '[]'::jsonb",
+		"ADD COLUMN IF NOT EXISTS details jsonb NOT NULL DEFAULT '{}'::jsonb",
+		"UPDATE servers SET operating_system = '' WHERE operating_system IS NULL",
+		"ALTER COLUMN operating_system SET NOT NULL",
+		"UPDATE server_health_snapshots SET services = '[]'::jsonb WHERE services IS NULL",
+		"ALTER COLUMN details SET NOT NULL",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("009 migration missing %q", clause)
+		}
 	}
 }
 

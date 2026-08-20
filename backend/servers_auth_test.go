@@ -8,10 +8,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,12 +117,22 @@ func TestEncryptDecryptServerCredential(t *testing.T) {
 }
 
 func TestServerResponseAuthContractOmitsCredentials(t *testing.T) {
-	encoded, err := json.Marshal(serverResponse{AuthMethod: authMethodPassword, CredentialConfigured: true})
+	uptime := int64(42)
+	encoded, err := json.Marshal(serverResponse{
+		AuthMethod:           authMethodPassword,
+		CredentialConfigured: true,
+		OperatingSystem:      "Ubuntu 24.04 LTS",
+		UptimeSeconds:        &uptime,
+		LatestSnapshot: &healthSnapshotResponse{
+			Services: []serviceHealthResponse{{Name: "ssh", Status: "active"}},
+			Details:  map[string]any{"collector": "linux_procfs"},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, field := range []string{`"auth_method":"password"`, `"credential_configured":true`} {
+	for _, field := range []string{`"auth_method":"password"`, `"credential_configured":true`, `"operating_system":"Ubuntu 24.04 LTS"`, `"uptime_seconds":42`, `"services":[{"name":"ssh","status":"active"}]`} {
 		if !strings.Contains(text, field) {
 			t.Errorf("response missing %s: %s", field, text)
 		}
@@ -157,11 +169,16 @@ func TestServerDraftTestRequiresOwnerAndValidCredential(t *testing.T) {
 }
 
 type testSSHServer struct {
+	mu         sync.RWMutex
 	listener   net.Listener
 	hostSigner ssh.Signer
 	userSigner ssh.Signer
 	userKey    string
 	password   string
+	execOutput string
+	execErr    string
+	execDelay  time.Duration
+	executed   chan string
 }
 
 func startTestSSHServer(t *testing.T) *testSSHServer {
@@ -172,7 +189,7 @@ func startTestSSHServer(t *testing.T) *testSSHServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &testSSHServer{listener: listener, hostSigner: hostSigner, userSigner: userSigner, userKey: userKey, password: "ssh-password"}
+	srv := &testSSHServer{listener: listener, hostSigner: hostSigner, userSigner: userSigner, userKey: userKey, password: "ssh-password", executed: make(chan string, 1)}
 	config := &ssh.ServerConfig{
 		PasswordCallback: func(_ ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 			if string(password) == srv.password {
@@ -203,13 +220,146 @@ func startTestSSHServer(t *testing.T) *testSSHServer {
 				defer sshConn.Close()
 				go ssh.DiscardRequests(requests)
 				for channel := range channels {
-					_ = channel.Reject(ssh.UnknownChannelType, "unsupported")
+					if channel.ChannelType() != "session" {
+						_ = channel.Reject(ssh.UnknownChannelType, "unsupported")
+						continue
+					}
+					ch, channelRequests, channelErr := channel.Accept()
+					if channelErr != nil {
+						continue
+					}
+					srv.mu.RLock()
+					output, commandError, delay := srv.execOutput, srv.execErr, srv.execDelay
+					srv.mu.RUnlock()
+					go func(output, commandError string, delay time.Duration) {
+						for req := range channelRequests {
+							var payload struct{ Command string }
+							if req.Type != "exec" || ssh.Unmarshal(req.Payload, &payload) != nil {
+								req.Reply(false, nil)
+								continue
+							}
+							srv.executed <- payload.Command
+							req.Reply(true, nil)
+							time.Sleep(delay)
+							_, _ = io.Copy(ch, strings.NewReader(output))
+							if commandError != "" {
+								_, _ = io.Copy(ch.Stderr(), strings.NewReader(commandError))
+							}
+							status := uint32(0)
+							if commandError != "" {
+								status = 1
+							}
+							_ = ch.CloseWrite()
+							_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+							_ = ch.Close()
+							return
+						}
+					}(output, commandError, delay)
 				}
 			}(conn)
 		}
 	}()
 	t.Cleanup(func() { _ = listener.Close() })
 	return srv
+}
+
+func (s *testSSHServer) setExec(output, commandError string, delay time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.execOutput = output
+	s.execErr = commandError
+	s.execDelay = delay
+}
+
+func TestParseHealthInventory(t *testing.T) {
+	fixture := `operating_system=Ubuntu 24.04.1 LTS
+uptime_seconds=98765
+cpu1=100 10 40 850 0 0 0 0
+cpu2=130 10 50 910 0 0 0 0
+memory_total_kb=8000000
+memory_available_kb=2000000
+disk_percent=73%
+service=cron.service|failed
+service=ssh|active
+`
+	got, err := parseHealthInventory(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OperatingSystem != "Ubuntu 24.04.1 LTS" || got.UptimeSeconds != 98765 {
+		t.Fatalf("identity = %+v", got)
+	}
+	if got.CPUPercent != 40 || got.MemoryPercent != 75 || got.DiskPercent != 73 {
+		t.Fatalf("metrics = cpu %.2f memory %.2f disk %.2f", got.CPUPercent, got.MemoryPercent, got.DiskPercent)
+	}
+	if len(got.Services) != 2 || got.Services[0].Name != "cron.service" || got.Services[0].Status != "failed" {
+		t.Fatalf("services = %+v", got.Services)
+	}
+}
+
+func TestParseHealthInventoryRejectsMalformedAndClampsPercentages(t *testing.T) {
+	if _, err := parseHealthInventory("operating_system=Linux\nuptime_seconds=nope\n"); err == nil {
+		t.Fatal("malformed uptime accepted")
+	}
+	got, err := parseHealthInventory("operating_system=Linux\nuptime_seconds=1\ncpu1=1 0 0 9\ncpu2=101 0 0 9\nmemory_total_kb=10\nmemory_available_kb=-5\ndisk_percent=120\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CPUPercent != 100 || got.MemoryPercent != 100 || got.DiskPercent != 100 {
+		t.Fatalf("percentages not clamped: %+v", got)
+	}
+}
+
+func TestCollectHealthInventoryUsesFixedCommand(t *testing.T) {
+	srv := startTestSSHServer(t)
+	srv.setExec("operating_system=Debian GNU/Linux 12\nuptime_seconds=12\ncpu1=1 0 1 8\ncpu2=2 0 2 16\nmemory_total_kb=100\nmemory_available_kb=40\ndisk_percent=20\nservice=ssh|active\n", "", 0)
+	client, _, err := dialAuthenticatedSSH(context.Background(), srv.target(authMethodPassword, ssh.FingerprintSHA256(srv.hostSigner.PublicKey())), srv.password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	got, err := collectHealthInventory(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OperatingSystem != "Debian GNU/Linux 12" {
+		t.Fatalf("inventory = %+v", got)
+	}
+	select {
+	case command := <-srv.executed:
+		if command != healthInventoryCommand {
+			t.Fatalf("command changed: %q", command)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("health command not executed")
+	}
+}
+
+func TestCollectHealthInventoryHonorsContext(t *testing.T) {
+	srv := startTestSSHServer(t)
+	srv.setExec("", "", time.Second)
+	client, _, err := dialAuthenticatedSSH(context.Background(), srv.target(authMethodPassword, ""), srv.password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := collectHealthInventory(ctx, client); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("timeout error = %v", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatalf("collector did not stop promptly: %s", time.Since(started))
+	}
+}
+
+func TestHealthOutputBufferLimitsOutput(t *testing.T) {
+	var output limitedHealthBuffer
+	written, err := output.Write([]byte(strings.Repeat("x", maxHealthOutputBytes+1)))
+	if err != nil || written != maxHealthOutputBytes+1 || !output.exceeded || output.Len() != maxHealthOutputBytes {
+		t.Fatalf("buffer written=%d len=%d exceeded=%v err=%v", written, output.Len(), output.exceeded, err)
+	}
 }
 
 func (s *testSSHServer) target(method, fingerprint string) sshConnectionTarget {

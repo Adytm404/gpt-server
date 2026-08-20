@@ -111,16 +111,38 @@ describe('server pages', () => {
     expect(bodies.every(body => body.auth_method === 'ssh_key' && body.private_key === 'test-private-key' && !('password' in body))).toBe(true)
   })
 
-  it('renders detail empty metrics and calls health endpoint', async () => {
+  it('runs health collection then reloads detail metrics, OS, uptime, and services', async () => {
+    let detailCalls = 0
+    const refreshedServer = {
+      ...server,
+      operating_system: 'Ubuntu 24.04 LTS',
+      uptime_seconds: 174600 + (12 * 60 * 60),
+      latest_snapshot: {
+        cpu_percent: 18,
+        memory_percent: 42,
+        disk_percent: 67,
+        captured_at: '2026-08-21T10:00:00Z',
+        services: [{ name: 'nginx', status: 'running', detail: 'active' }],
+      },
+    }
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      return new Response(JSON.stringify(url.endsWith('/health-check') ? { status: 'online', cpu_percent: 0, memory_percent: 0 } : server), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      if (url.endsWith('/health-check')) return new Response(JSON.stringify({ server: refreshedServer }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      detailCalls += 1
+      return new Response(JSON.stringify(detailCalls > 1 ? refreshedServer : server), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
     render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
-    expect(await screen.findByText(/No metrics snapshot available/)).toBeInTheDocument()
+    expect(await screen.findByText(/No metrics collected yet/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Run health check/i }))
     await waitFor(() => expect(screen.getByText('Health check completed')).toBeInTheDocument())
-    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/v1/servers/srv-1/health-check'))).toBe(true)
+    expect(fetchMock.mock.calls.map(([url]) => String(url).split('/').pop())).toEqual(['srv-1', 'health-check', 'srv-1'])
+    expect(screen.getByText('Ubuntu 24.04 LTS')).toBeInTheDocument()
+    expect(screen.getByText('2d 12h')).toBeInTheDocument()
+    expect(screen.getByText('18%')).toBeInTheDocument()
+    expect(screen.getByText('42%')).toBeInTheDocument()
+    expect(screen.getByText('67%')).toBeInTheDocument()
+    expect(screen.getByText('nginx')).toBeInTheDocument()
+    expect(screen.getByText('active')).toBeInTheDocument()
   })
 
   it('shows backend list failure and retry', async () => {
@@ -139,6 +161,27 @@ describe('server pages', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('connection refused')
     expect(screen.getByText('Production API')).toBeInTheDocument()
     expect(screen.queryByText('connection refused', { selector: '.health-banner *' })).not.toBeInTheDocument()
+  })
+
+  it('reloads detail after successful SSH test and keeps success text', async () => {
+    let detailCalls = 0
+    const refreshedServer = { ...server, status: 'online', host_fingerprint: 'SHA256:discovered' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/test')) return new Response(JSON.stringify({ success: true, message: 'SSH connection successful' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      detailCalls += 1
+      return new Response(JSON.stringify(detailCalls > 1 ? refreshedServer : { ...server, status: 'unknown', host_fingerprint: '' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
+    expect(await screen.findByText('Not reported')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Test SSH connection' }))
+
+    expect(await screen.findByText('SSH connection successful')).toBeInTheDocument()
+    expect(screen.getByText('Online', { selector: '.status-pill' })).toBeInTheDocument()
+    expect(screen.getByText('Fingerprint stored')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'SSH access' }))
+    expect(screen.getByText('SHA256:discovered')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.map(([url]) => String(url).split('/').pop())).toEqual(['srv-1', 'test', 'srv-1'])
   })
 
   it('keeps detail mounted after action HTTP failure', async () => {

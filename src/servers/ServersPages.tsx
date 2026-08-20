@@ -595,8 +595,10 @@ export function ServerDetailPage() {
     setActionError("");
     try {
       const result = await serversApi.testConnection(id);
-      if (result.ok) setActionMessage(result.message || "Connection successful");
-      else setActionError(result.message || "Connection failed");
+      if (result.ok) {
+        setActionMessage(result.message || "Connection successful");
+        setServer(await serversApi.get(id));
+      } else setActionError(result.message || "Connection failed");
     } catch (caught) {
       setActionError(message(caught));
     } finally {
@@ -746,12 +748,12 @@ export function ServerDetailPage() {
               </span>
               <div>
                 <strong>
-                  {checking ? "Checking system health..." : server.status}
+                  {checking ? "Collecting health over SSH..." : server.status}
                 </strong>
                 <p>
                   {snapshot
-                    ? `Snapshot ${new Date(snapshot.capturedAt).toLocaleString()}`
-                    : "No health snapshot returned yet."}
+                    ? `SSH health collected ${new Date(snapshot.capturedAt).toLocaleString()}`
+                    : "No SSH health snapshot collected yet."}
                 </p>
               </div>
             </div>
@@ -813,7 +815,7 @@ function Metrics({ snapshot }: { snapshot: Server["latestSnapshot"] }) {
     </div>
   ) : (
     <div className="server-empty-panel">
-      No metrics snapshot available. Run health check to request one.
+      No metrics collected yet. Run SSH health check to collect them.
     </div>
   );
 }
