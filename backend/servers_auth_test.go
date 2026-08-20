@@ -262,3 +262,20 @@ func TestSSHConnectionHonorsCancelledContext(t *testing.T) {
 		t.Fatalf("cancelled result=%+v duration=%s", result, time.Since(started))
 	}
 }
+
+func TestDialSSHRetryHonorsDeadlineAndReportsTCPPhase(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := dialSSHWithRetry(ctx, "192.0.2.1:22", 3)
+	if err == nil || time.Since(started) > time.Second {
+		t.Fatalf("retry err=%v duration=%s", err, time.Since(started))
+	}
+	if !isTimeoutError(ctx, err) {
+		t.Fatalf("timeout not recognized: %v", err)
+	}
+	result := testSSHConnection(ctx, sshConnectionTarget{Host: "192.0.2.1", Port: 22, SSHUser: "root", AuthMethod: authMethodPassword}, "secret")
+	if result.Error != "TCP connection timed out before SSH handshake" {
+		t.Fatalf("error = %q", result.Error)
+	}
+}

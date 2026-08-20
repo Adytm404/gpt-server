@@ -20,6 +20,24 @@ func TestUserResponseIncludesPlatformRole(t *testing.T) {
 	}
 }
 
+func TestSSHConnectTimeoutConfig(t *testing.T) {
+	t.Setenv("SSH_CONNECT_TIMEOUT", "45s")
+	t.Setenv("MODEL_KEY_ENCRYPTION_KEY", "")
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.sshConnectTimeout != 45*time.Second {
+		t.Fatalf("ssh timeout = %s", cfg.sshConnectTimeout)
+	}
+	for _, value := range []string{"4s", "3m", "invalid"} {
+		t.Setenv("SSH_CONNECT_TIMEOUT", value)
+		if _, err := loadConfig(); err == nil {
+			t.Errorf("invalid SSH_CONNECT_TIMEOUT %q accepted", value)
+		}
+	}
+}
+
 func TestPasswordHash(t *testing.T) {
 	hash, err := hashPassword("correct horse battery staple")
 	if err != nil {

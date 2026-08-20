@@ -271,7 +271,7 @@ func (s *server) testServer(w http.ResponseWriter, r *http.Request) {
 	if decryptErr != nil {
 		result = offlineSSHResult(target, "server credential unavailable")
 	} else {
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), normalizedSSHTimeout(s.cfg.sshConnectTimeout))
 		result = testSSHConnection(ctx, target, secret)
 		cancel()
 	}
@@ -309,7 +309,7 @@ func (s *server) testDraftServer(w http.ResponseWriter, r *http.Request) {
 	if method == authMethodPassword {
 		secret = in.Password
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), normalizedSSHTimeout(s.cfg.sshConnectTimeout))
 	defer cancel()
 	s.writeJSON(w, 200, testSSHConnection(ctx, sshConnectionTarget{Host: in.Host, Port: in.Port, SSHUser: in.SSHUser, AuthMethod: method, HostFingerprint: in.HostFingerprint}, secret))
 }
@@ -469,10 +469,16 @@ func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret s
 		auth = ssh.PublicKeys(signer)
 	}
 	observed := ""
+	connectTimeout := normalizedSSHTimeout(0)
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 {
+			connectTimeout = remaining
+		}
+	}
 	config := &ssh.ClientConfig{
 		User:    target.SSHUser,
 		Auth:    []ssh.AuthMethod{auth},
-		Timeout: 10 * time.Second,
+		Timeout: connectTimeout,
 		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 			observed = ssh.FingerprintSHA256(key)
 			if target.HostFingerprint != "" && observed != target.HostFingerprint {
@@ -481,15 +487,18 @@ func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret s
 			return nil
 		},
 	}
-	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port)))
+	conn, err := dialSSHWithRetry(ctx, net.JoinHostPort(target.Host, strconv.Itoa(target.Port)), 3)
 	if err != nil {
-		result.Error = sanitizeSSHError(err.Error())
+		if isTimeoutError(ctx, err) {
+			result.Error = "TCP connection timed out before SSH handshake"
+		} else {
+			result.Error = sanitizeSSHError(err.Error())
+		}
 		result.LatencyMS = int(time.Since(started).Milliseconds())
 		return result
 	}
 	defer conn.Close()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(connectTimeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
 		deadline = contextDeadline
 	}
@@ -500,7 +509,11 @@ func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret s
 		result.HostFingerprint = observed
 	}
 	if err != nil {
-		result.Error = sanitizeSSHError(err.Error())
+		if isTimeoutError(ctx, err) {
+			result.Error = "SSH handshake timed out"
+		} else {
+			result.Error = sanitizeSSHError(err.Error())
+		}
 		return result
 	}
 	client := ssh.NewClient(clientConn, channels, requests)
@@ -509,6 +522,56 @@ func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret s
 	result.Error = ""
 	result.FingerprintVerified = target.HostFingerprint != "" && observed == target.HostFingerprint
 	return result
+}
+
+func normalizedSSHTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultSSHConnectTimeout
+	}
+	return timeout
+}
+
+func dialSSHWithRetry(ctx context.Context, address string, attempts int) (net.Conn, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		attemptTimeout := 15 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			left := time.Duration(attempts - attempt)
+			if share := remaining / left; share < attemptTimeout {
+				attemptTimeout = share
+			}
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		conn, err := (&net.Dialer{}).DialContext(attemptCtx, "tcp", address)
+		cancel()
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		if attempt+1 < attempts {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Second):
+			}
+		}
+	}
+	return nil, lastErr
+}
+
+func isTimeoutError(ctx context.Context, err error) bool {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func sanitizeSSHError(message string) string {

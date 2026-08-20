@@ -31,11 +31,12 @@ import (
 )
 
 const (
-	sessionCookie    = "opsai_session"
-	csrfCookie       = "opsai_csrf"
-	platformRoleUser = "user"
-	maxBodyBytes     = 1 << 20
-	maxSessionTTL    = 30 * 24 * time.Hour
+	sessionCookie            = "opsai_session"
+	csrfCookie               = "opsai_csrf"
+	platformRoleUser         = "user"
+	maxBodyBytes             = 1 << 20
+	maxSessionTTL            = 30 * 24 * time.Hour
+	defaultSSHConnectTimeout = 45 * time.Second
 )
 
 type config struct {
@@ -43,7 +44,7 @@ type config struct {
 	dbHost, dbPort, dbUser, dbName, dbPassword, dbSSL string
 	serverKeyEncryptionKey                            string
 	modelKeyEncryptionKey                             string
-	sessionTTL                                        time.Duration
+	sessionTTL, sshConnectTimeout                     time.Duration
 	cookieSecure                                      bool
 }
 
@@ -131,7 +132,7 @@ func main() {
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      cfg.sshConnectTimeout + 10*time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 	log.Printf("auth server listening on %s", cfg.addr)
@@ -158,6 +159,10 @@ func loadConfig() (config, error) {
 	}
 	if cfg.sessionTTL > maxSessionTTL {
 		cfg.sessionTTL = maxSessionTTL
+	}
+	cfg.sshConnectTimeout, err = time.ParseDuration(env("SSH_CONNECT_TIMEOUT", defaultSSHConnectTimeout.String()))
+	if err != nil || cfg.sshConnectTimeout < 5*time.Second || cfg.sshConnectTimeout > 2*time.Minute {
+		return config{}, errors.New("SSH_CONNECT_TIMEOUT must be between 5s and 2m")
 	}
 	cfg.cookieSecure, err = strconv.ParseBool(env("COOKIE_SECURE", "false"))
 	if err != nil {
