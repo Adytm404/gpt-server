@@ -8,12 +8,19 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 )
 
 var safeToken = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@/+:-]*$`)
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 const maxModelAPIKeyBytes = 16 * 1024
+
+const (
+	authMethodSSHKey   = "ssh_key"
+	authMethodPassword = "password"
+	maxServerPassword  = 4096
+)
 
 type serverInput struct {
 	Name            string `json:"name"`
@@ -23,7 +30,9 @@ type serverInput struct {
 	Environment     string `json:"environment"`
 	Region          string `json:"region"`
 	HostFingerprint string `json:"host_fingerprint"`
+	AuthMethod      string `json:"auth_method"`
 	PrivateKey      string `json:"private_key,omitempty"`
+	Password        string `json:"password,omitempty"`
 }
 type modelInput struct {
 	Name          string `json:"name"`
@@ -68,6 +77,63 @@ func validateServerInput(in serverInput) error {
 	}
 	if in.HostFingerprint != "" && (!strings.HasPrefix(in.HostFingerprint, "SHA256:") || len(in.HostFingerprint) < 16 || len(in.HostFingerprint) > 128 || !safeToken.MatchString(in.HostFingerprint)) {
 		return errors.New("invalid host fingerprint")
+	}
+	return nil
+}
+
+func normalizedAuthMethod(method string) string {
+	if method == "" {
+		return authMethodSSHKey
+	}
+	return method
+}
+
+func validateServerCreateInput(in serverInput) error {
+	if err := validateServerInput(in); err != nil {
+		return err
+	}
+	switch normalizedAuthMethod(in.AuthMethod) {
+	case authMethodSSHKey:
+		if strings.TrimSpace(in.PrivateKey) == "" || in.Password != "" {
+			return errors.New("SSH private key required")
+		}
+		_, err := ssh.ParsePrivateKey([]byte(in.PrivateKey))
+		return err
+	case authMethodPassword:
+		if strings.TrimSpace(in.Password) == "" || len(in.Password) > maxServerPassword || in.PrivateKey != "" {
+			return errors.New("SSH password required")
+		}
+		return nil
+	default:
+		return errors.New("invalid auth method")
+	}
+}
+
+func validateServerUpdateInput(in serverInput, currentMethod string, hasPrivateKey, hasPassword bool) error {
+	if err := validateServerInput(in); err != nil {
+		return err
+	}
+	method := normalizedAuthMethod(in.AuthMethod)
+	if method != authMethodSSHKey && method != authMethodPassword {
+		return errors.New("invalid auth method")
+	}
+	keyProvided := strings.TrimSpace(in.PrivateKey) != ""
+	passwordProvided := strings.TrimSpace(in.Password) != ""
+	if keyProvided && passwordProvided {
+		return errors.New("only selected credential allowed")
+	}
+	if method == authMethodSSHKey {
+		if passwordProvided || (method != currentMethod && !keyProvided) || (!keyProvided && !hasPrivateKey) {
+			return errors.New("SSH private key required")
+		}
+		if keyProvided {
+			_, err := ssh.ParsePrivateKey([]byte(in.PrivateKey))
+			return err
+		}
+		return nil
+	}
+	if keyProvided || len(in.Password) > maxServerPassword || (method != currentMethod && !passwordProvided) || (!passwordProvided && !hasPassword) {
+		return errors.New("SSH password required")
 	}
 	return nil
 }

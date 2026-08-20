@@ -8,10 +8,13 @@ import {
   Check,
   CheckCircle2,
   Cpu,
+  Eye,
+  EyeOff,
   HardDrive,
   KeyRound,
   LayoutGrid,
   ListFilter,
+  LockKeyhole,
   MemoryStick,
   Plus,
   Search,
@@ -324,13 +327,16 @@ function AddServerModal({
 }) {
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [created, setCreated] = useState<Server | null>(null);
+  const [testResult, setTestResult] = useState<{ authMethod?: "ssh_key" | "password"; latencyMs?: number } | null>(null);
   const [form, setForm] = useState<CreateServerDTO>({
     name: "",
     host: "",
     port: 22,
     username: "root",
+    auth_method: "ssh_key",
     private_key: "",
     host_fingerprint: "",
     environment: "production",
@@ -340,53 +346,52 @@ function AddServerModal({
     form.host.trim() &&
     form.username.trim() &&
     form.port &&
-    form.private_key,
+    (form.auth_method === "ssh_key" ? form.private_key : form.password),
   );
-  const create = async () => {
+  const testAndCreate = async () => {
     setSaving(true);
     setError("");
     try {
+      const result = await serversApi.testDraft(form);
+      if (!result.ok) throw new Error(result.message || "SSH connection failed");
+      setTestResult({ ...result, authMethod: result.authMethod || form.auth_method });
+      setStep(2);
       const server = await serversApi.create(form);
       setCreated(server);
       persisted();
-      setForm((current) => ({ ...current, private_key: "" }));
-      setStep(2);
+      setForm((current) => ({ ...current, private_key: "", password: "" }));
+      setStep(3);
     } catch (caught) {
+      setStep(1);
       setError(message(caught));
     } finally {
       setSaving(false);
     }
   };
-  const verify = async () => {
-    if (!created) return;
-    setSaving(true);
+  const changeAuthMethod = (auth_method: CreateServerDTO["auth_method"]) => {
     setError("");
-    try {
-      const result = await serversApi.testConnection(created.id);
-      if (!result.ok)
-        throw new Error(result.message || "Connection test failed");
-      setStep(3);
-    } catch (caught) {
-      setError(message(caught));
-    } finally {
-      setSaving(false);
-    }
+    setShowPassword(false);
+    setForm((current) => ({ ...current, auth_method, private_key: auth_method === "password" ? "" : current.private_key, password: auth_method === "ssh_key" ? "" : current.password }));
+  };
+  const dismiss = () => {
+    setForm((current) => ({ ...current, private_key: "", password: "" }));
+    close();
   };
   return createPortal(
     <div className="modal-layer">
-      <button className="modal-scrim" onClick={close} aria-label="Close" />
+      <button className="modal-scrim" onClick={dismiss} aria-label="Close" />
       <div className="modal-card">
         <div className="modal-header">
           <div>
             <span className="page-eyebrow">Secure connection</span>
             <h2>Add a server</h2>
           </div>
-          <button className="icon-button" onClick={close}>
+          <button className="icon-button" onClick={dismiss} aria-label="Close dialog">
             <X size={19} />
           </button>
         </div>
         <div className="stepper">
-          {["Connection details", "Verify access", "Connection ready"].map(
+          {["Details", "Verified", "Saved"].map(
             (label, index) => (
               <div
                 className={cn("step", step >= index + 1 && "active")}
@@ -439,19 +444,27 @@ function AddServerModal({
                 value={form.region || ""}
                 update={(region) => setForm({ ...form, region })}
               />
-              <label className="field full">
-                <span>Private key</span>
-                <textarea
-                  className="key-input"
-                  required
-                  rows={5}
-                  value={form.private_key}
-                  onChange={(e) =>
-                    setForm({ ...form, private_key: e.target.value })
-                  }
-                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                />
-              </label>
+              <div className="auth-method full">
+                <span className="auth-method-label">Authentication method</span>
+                <div className="auth-tabs" role="tablist" aria-label="Authentication method">
+                  <button type="button" role="tab" aria-selected={form.auth_method === "ssh_key"} onClick={() => changeAuthMethod("ssh_key")}><KeyRound size={16} /> SSH key</button>
+                  <button type="button" role="tab" aria-selected={form.auth_method === "password"} onClick={() => changeAuthMethod("password")}><LockKeyhole size={16} /> Password</button>
+                </div>
+              </div>
+              {form.auth_method === "ssh_key" ? (
+                <label className="field full" role="tabpanel">
+                  <span>Private key</span>
+                  <textarea className="key-input" required rows={5} value={form.private_key || ""} onChange={(e) => setForm({ ...form, private_key: e.target.value })} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
+                </label>
+              ) : (
+                <label className="field full" role="tabpanel">
+                  <span>SSH password</span>
+                  <span className="password-control">
+                    <input required value={form.password || ""} onChange={(e) => setForm({ ...form, password: e.target.value })} type={showPassword ? "text" : "password"} />
+                    <button type="button" onClick={() => setShowPassword((value) => !value)} aria-label={showPassword ? "Hide password" : "Show password"}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+                  </span>
+                </label>
+              )}
               <Field
                 full
                 label="Expected host fingerprint (optional)"
@@ -463,8 +476,8 @@ function AddServerModal({
               <div className="security-note full">
                 <ShieldCheck size={18} />
                 <span>
-                  <strong>Private key sent once</strong>Backend encrypts key and
-                  stores supplied fingerprint metadata. UI clears key after create.
+                  <strong>{form.auth_method === "ssh_key" ? "Encrypted key storage" : "One-time password entry"}</strong>
+                  {form.auth_method === "ssh_key" ? "Backend encrypts the private key. When supplied, host fingerprint matching is strict." : "Password is sent to backend, encrypted at rest, and never displayed again. A supplied fingerprint is matched strictly."}
                 </span>
               </div>
             </div>
@@ -474,19 +487,12 @@ function AddServerModal({
               <div className="success-seal">
                 <KeyRound size={25} />
               </div>
-              <h3>Server created</h3>
-              <p>Test TCP reachability to configured network endpoint before finishing.</p>
+              <h3>SSH access verified</h3>
+              <p>Credential accepted. Saving server now.</p>
               <div className="check-list">
                 <span>
-                  <Check size={15} /> Backend accepted server
+                  <Check size={15} /> SSH authentication succeeded
                 </span>
-                <span>
-                  <Check size={15} /> Private key cleared from form
-                </span>
-                <span>
-                  Stored fingerprint: {created?.fingerprint || "not provided"}
-                </span>
-                <span>Connection test pending</span>
               </div>
             </div>
           )}
@@ -495,8 +501,8 @@ function AddServerModal({
               <div className="success-seal">
                 <Check size={26} />
               </div>
-              <h3>Connection verified</h3>
-              <p>Backend reached {created?.host}:{created?.port} over TCP. SSH authentication was not verified.</p>
+              <h3>Server saved</h3>
+              <p>{testResult?.authMethod === "password" ? "Password" : "SSH key"} authentication verified{typeof testResult?.latencyMs === "number" ? ` in ${testResult.latencyMs} ms` : ""}. Credential cleared from this form.</p>
             </div>
           )}
           {error && (
@@ -506,7 +512,7 @@ function AddServerModal({
           )}
         </div>
         <div className="modal-footer">
-          <button className="button secondary" onClick={close}>
+          <button className="button secondary" onClick={dismiss}>
             Cancel
           </button>
           <button
@@ -514,19 +520,15 @@ function AddServerModal({
             disabled={saving || (step === 1 && !ready)}
             onClick={() =>
               step === 1
-                ? void create()
-                : step === 2
-                  ? void verify()
-                  : created && saved()
+                ? void testAndCreate()
+                : created && saved()
             }
           >
             {saving
               ? "Working..."
               : step === 1
-                ? "Create server"
-                : step === 2
-                  ? "Test network endpoint"
-                  : "Finish"}{" "}
+                ? "Test & add server"
+                : "Finish"}{" "}
             <ArrowRight size={16} />
           </button>
         </div>
@@ -664,7 +666,7 @@ export function ServerDetailPage() {
               disabled={testing}
               onClick={() => void test()}
             >
-              {testing ? "Testing..." : "Test network endpoint"}
+              {testing ? "Testing..." : "Test SSH connection"}
             </button>
             <button
               className="button secondary danger-button"
@@ -693,6 +695,10 @@ export function ServerDetailPage() {
           <div>
             <span>Uptime</span>
             <b>{server.uptime}</b>
+          </div>
+          <div>
+            <span>Authentication</span>
+            <b>{server.authMethod === "password" ? "Password" : "SSH key"}</b>
           </div>
           <div>
             <span>SSH access</span>
@@ -782,7 +788,7 @@ export function ServerDetailPage() {
             disabled={testing}
             onClick={() => void test()}
           >
-            Test network endpoint
+            Test SSH connection
           </button>
         </div>
       )}

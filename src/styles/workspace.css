@@ -114,7 +114,7 @@
 .modal-body { padding: 24px; min-height: 315px; position: relative; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 17px; }
 .field { display: flex; flex-direction: column; gap: 7px; }
-.field.full, .security-note.full { grid-column: 1/-1; }
+.field.full, .security-note.full, .auth-method.full { grid-column: 1/-1; }
 .field>span { font-size: 10px; font-weight: 650; }
 .field>span em { font-style: normal; font-weight: 400; color: #aaa; float: right; }
 .field input, .field textarea, .field select { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; outline: 0; background: #fcfcfb; font-size: 11px; color: var(--ink); }
@@ -124,6 +124,16 @@
 .security-note { display: flex; gap: 11px; align-items: flex-start; color: #635790; background: var(--accent-soft); border: 1px solid #e1dafd; border-radius: 9px; padding: 12px; }
 .security-note span { display: flex; flex-direction: column; font-size: 9px; line-height: 1.55; }
 .security-note strong { font-size: 10px; color: #403563; }
+.auth-method { display: flex; flex-direction: column; gap: 7px; }
+.auth-method-label { color: var(--muted); font-size: 10px; font-weight: 700; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: #f5f4f2; }
+.auth-tabs button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; transition: .18s ease; }
+.auth-tabs button[aria-selected="true"] { color: #26202f; background: #fff; box-shadow: 0 2px 8px #21192b14; }
+.auth-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.password-control { position: relative; display: block; }
+.password-control input { width: 100%; padding-right: 44px; }
+.password-control button { position: absolute; top: 50%; right: 5px; display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; transform: translateY(-50%); cursor: pointer; }
+.password-control button:hover { color: var(--ink); background: #f1efed; }
 .modal-footer { padding: 15px 24px; background: #fafaf8; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
 .connection-result { text-align: center; padding: 20px 0; }
 .success-seal { width: 58px; height: 58px; border-radius: 50%; margin: auto; display: grid; place-items: center; color: #fff; background: var(--green); box-shadow: 0 0 0 9px #20876a0e; }

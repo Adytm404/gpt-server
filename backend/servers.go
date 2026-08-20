@@ -11,12 +11,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/ssh"
 )
 
 type serverResponse struct {
@@ -28,6 +30,7 @@ type serverResponse struct {
 	Environment          string                  `json:"environment"`
 	Region               string                  `json:"region"`
 	HostFingerprint      string                  `json:"host_fingerprint"`
+	AuthMethod           string                  `json:"auth_method"`
 	CredentialConfigured bool                    `json:"credential_configured"`
 	Status               string                  `json:"status"`
 	LastError            string                  `json:"last_error,omitempty"`
@@ -47,17 +50,18 @@ type healthSnapshotResponse struct {
 	CapturedAt    time.Time `json:"captured_at"`
 }
 
-const serverColumns = `id,name,host,port,ssh_user,environment,region,host_fingerprint,(private_key_ciphertext IS NOT NULL),status,last_error,last_checked_at,created_at,updated_at`
+const serverColumns = `id,name,host,port,ssh_user,environment,region,host_fingerprint,auth_method,CASE WHEN auth_method='password' THEN password_ciphertext IS NOT NULL ELSE private_key_ciphertext IS NOT NULL END,status,last_error,last_checked_at,created_at,updated_at`
 
 func scanServer(row pgx.Row) (serverResponse, error) {
 	var out serverResponse
-	err := row.Scan(&out.ID, &out.Name, &out.Host, &out.Port, &out.SSHUser, &out.Environment, &out.Region, &out.HostFingerprint, &out.CredentialConfigured, &out.Status, &out.LastError, &out.LastCheckedAt, &out.CreatedAt, &out.UpdatedAt)
+	err := row.Scan(&out.ID, &out.Name, &out.Host, &out.Port, &out.SSHUser, &out.Environment, &out.Region, &out.HostFingerprint, &out.AuthMethod, &out.CredentialConfigured, &out.Status, &out.LastError, &out.LastCheckedAt, &out.CreatedAt, &out.UpdatedAt)
 	return out, err
 }
 
 func (s *server) serverRoutes(r chi.Router) {
 	r.Get("/", s.requireWorkspaceAction("read", s.listServers))
 	r.With(s.requireMutation).Post("/", s.requireWorkspaceAction("create", s.createServer))
+	r.With(s.requireMutation).Post("/test-draft", s.requireWorkspaceAction("draft-test", s.testDraftServer))
 	r.Get("/{id}", s.requireWorkspaceAction("read", s.getServer))
 	r.With(s.requireMutation).Patch("/{id}", s.requireWorkspaceAction("update", s.updateServer))
 	r.With(s.requireMutation).Delete("/{id}", s.requireWorkspaceAction("delete", s.deleteServer))
@@ -123,18 +127,25 @@ func (s *server) getServer(w http.ResponseWriter, r *http.Request) {
 }
 func (s *server) createServer(w http.ResponseWriter, r *http.Request) {
 	var in serverInput
-	if decodeJSON(r, &in) != nil || validateServerInput(in) != nil {
+	if decodeJSON(r, &in) != nil || validateServerCreateInput(in) != nil {
 		s.writeError(w, r, 400, "invalid server fields")
 		return
 	}
-	var encrypted []byte
-	var err error
-	if in.PrivateKey != "" {
-		encrypted, err = encryptPrivateKey(s.cfg.serverKeyEncryptionKey, in.PrivateKey)
-		if err != nil {
-			s.writeError(w, r, 500, "server key encryption is not configured")
-			return
-		}
+	method := normalizedAuthMethod(in.AuthMethod)
+	secret := in.PrivateKey
+	if method == authMethodPassword {
+		secret = in.Password
+	}
+	encrypted, err := encryptServerCredential(s.cfg.serverKeyEncryptionKey, secret)
+	if err != nil {
+		s.writeError(w, r, 500, "server credential encryption is not configured")
+		return
+	}
+	var privateKeyCiphertext, passwordCiphertext []byte
+	if method == authMethodSSHKey {
+		privateKeyCiphertext = encrypted
+	} else {
+		passwordCiphertext = encrypted
 	}
 	id := uuid.New()
 	tx, err := s.db.Begin(r.Context())
@@ -143,7 +154,7 @@ func (s *server) createServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	out, err := scanServer(tx.QueryRow(r.Context(), `INSERT INTO servers(id,workspace_id,name,host,port,ssh_user,environment,region,host_fingerprint,private_key_ciphertext) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING `+serverColumns, id, authFrom(r.Context()).WorkspaceID, strings.TrimSpace(in.Name), in.Host, in.Port, in.SSHUser, in.Environment, in.Region, in.HostFingerprint, encrypted))
+	out, err := scanServer(tx.QueryRow(r.Context(), `INSERT INTO servers(id,workspace_id,name,host,port,ssh_user,environment,region,host_fingerprint,auth_method,private_key_ciphertext,password_ciphertext) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING `+serverColumns, id, authFrom(r.Context()).WorkspaceID, strings.TrimSpace(in.Name), in.Host, in.Port, in.SSHUser, in.Environment, in.Region, in.HostFingerprint, method, privateKeyCiphertext, passwordCiphertext))
 	if err == nil {
 		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "servers", "Server created", id, out.Name, nil)
 	}
@@ -162,20 +173,9 @@ func (s *server) updateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in serverInput
-	if decodeJSON(r, &in) != nil || validateServerInput(in) != nil {
+	if decodeJSON(r, &in) != nil {
 		s.writeError(w, r, 400, "invalid server fields")
 		return
-	}
-	var encrypted []byte
-	configured := false
-	if in.PrivateKey != "" {
-		var err error
-		encrypted, err = encryptPrivateKey(s.cfg.serverKeyEncryptionKey, in.PrivateKey)
-		if err != nil {
-			s.writeError(w, r, 500, "server key encryption is not configured")
-			return
-		}
-		configured = true
 	}
 	tx, err := s.db.Begin(r.Context())
 	if err != nil {
@@ -183,7 +183,36 @@ func (s *server) updateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	out, err := scanServer(tx.QueryRow(r.Context(), `UPDATE servers SET name=$3,host=$4,port=$5,ssh_user=$6,environment=$7,region=$8,host_fingerprint=$9,private_key_ciphertext=CASE WHEN $10 THEN $11 ELSE private_key_ciphertext END,status=CASE WHEN host<>$4 OR port<>$5 THEN 'unknown' ELSE status END,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL RETURNING `+serverColumns, id, authFrom(r.Context()).WorkspaceID, strings.TrimSpace(in.Name), in.Host, in.Port, in.SSHUser, in.Environment, in.Region, in.HostFingerprint, configured, encrypted))
+	var currentMethod string
+	var hasPrivateKey, hasPassword bool
+	err = tx.QueryRow(r.Context(), `SELECT auth_method,private_key_ciphertext IS NOT NULL,password_ciphertext IS NOT NULL FROM servers WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL FOR UPDATE`, id, authFrom(r.Context()).WorkspaceID).Scan(&currentMethod, &hasPrivateKey, &hasPassword)
+	if errors.Is(err, pgx.ErrNoRows) {
+		s.writeError(w, r, 404, "not found")
+		return
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	if err := validateServerUpdateInput(in, currentMethod, hasPrivateKey, hasPassword); err != nil {
+		s.writeError(w, r, 400, "invalid server fields")
+		return
+	}
+	method := normalizedAuthMethod(in.AuthMethod)
+	var encrypted []byte
+	credentialChanged := strings.TrimSpace(in.PrivateKey) != "" || strings.TrimSpace(in.Password) != ""
+	if credentialChanged {
+		secret := in.PrivateKey
+		if method == authMethodPassword {
+			secret = in.Password
+		}
+		encrypted, err = encryptServerCredential(s.cfg.serverKeyEncryptionKey, secret)
+		if err != nil {
+			s.writeError(w, r, 500, "server credential encryption is not configured")
+			return
+		}
+	}
+	out, err := scanServer(tx.QueryRow(r.Context(), `UPDATE servers SET name=$3,host=$4,port=$5,ssh_user=$6,environment=$7,region=$8,host_fingerprint=$9,auth_method=$10,private_key_ciphertext=CASE WHEN $10='password' THEN NULL WHEN $11 THEN $12 ELSE private_key_ciphertext END,password_ciphertext=CASE WHEN $10='ssh_key' THEN NULL WHEN $11 THEN $12 ELSE password_ciphertext END,status=CASE WHEN host<>$4 OR port<>$5 OR ssh_user<>$6 OR auth_method<>$10 OR $11 THEN 'unknown' ELSE status END,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL RETURNING `+serverColumns, id, authFrom(r.Context()).WorkspaceID, strings.TrimSpace(in.Name), in.Host, in.Port, in.SSHUser, in.Environment, in.Region, in.HostFingerprint, method, credentialChanged, encrypted))
 	if err == nil {
 		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "servers", "Server updated", id, out.Name, nil)
 	}
@@ -225,9 +254,67 @@ func (s *server) deleteServer(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(204)
 }
-func (s *server) testServer(w http.ResponseWriter, r *http.Request)   { s.checkServer(w, r, false) }
-func (s *server) healthServer(w http.ResponseWriter, r *http.Request) { s.checkServer(w, r, true) }
-func (s *server) checkServer(w http.ResponseWriter, r *http.Request, health bool) {
+func (s *server) testServer(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	var target sshConnectionTarget
+	var ciphertext []byte
+	err := s.db.QueryRow(r.Context(), `SELECT host,port,ssh_user,auth_method,host_fingerprint,CASE WHEN auth_method='password' THEN password_ciphertext ELSE private_key_ciphertext END FROM servers WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL`, id, authFrom(r.Context()).WorkspaceID).Scan(&target.Host, &target.Port, &target.SSHUser, &target.AuthMethod, &target.HostFingerprint, &ciphertext)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	secret, decryptErr := decryptServerCredential(s.cfg.serverKeyEncryptionKey, ciphertext)
+	var result sshConnectionResult
+	if decryptErr != nil {
+		result = offlineSSHResult(target, "server credential unavailable")
+	} else {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		result = testSSHConnection(ctx, target, secret)
+		cancel()
+	}
+	tx, err := s.db.Begin(r.Context())
+	if err == nil {
+		fingerprint := target.HostFingerprint
+		if result.Status == "online" && fingerprint == "" {
+			fingerprint = result.HostFingerprint
+		}
+		_, err = tx.Exec(r.Context(), `UPDATE servers SET status=$3,last_error=$4,last_checked_at=now(),host_fingerprint=$5,updated_at=now() WHERE id=$1 AND workspace_id=$2`, id, authFrom(r.Context()).WorkspaceID, result.Status, result.Error, fingerprint)
+	}
+	if err == nil {
+		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "servers", "Server connection tested", id, target.Host, map[string]any{"status": result.Status, "latency_ms": result.LatencyMS, "auth_method": result.AuthMethod, "fingerprint_verified": result.FingerprintVerified})
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	} else if tx != nil {
+		_ = tx.Rollback(r.Context())
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, result)
+}
+
+func (s *server) testDraftServer(w http.ResponseWriter, r *http.Request) {
+	var in serverInput
+	if decodeJSON(r, &in) != nil || validateServerCreateInput(in) != nil {
+		s.writeError(w, r, 400, "invalid server fields")
+		return
+	}
+	method := normalizedAuthMethod(in.AuthMethod)
+	secret := in.PrivateKey
+	if method == authMethodPassword {
+		secret = in.Password
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	s.writeJSON(w, 200, testSSHConnection(ctx, sshConnectionTarget{Host: in.Host, Port: in.Port, SSHUser: in.SSHUser, AuthMethod: method, HostFingerprint: in.HostFingerprint}, secret))
+}
+
+func (s *server) healthServer(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.pathUUID(w, r)
 	if !ok {
 		return
@@ -250,23 +337,19 @@ func (s *server) checkServer(w http.ResponseWriter, r *http.Request, health bool
 	latency := int(time.Since(started).Milliseconds())
 	status, lastError := "online", ""
 	if dialErr != nil {
-		status, lastError = "offline", dialErr.Error()
+		status, lastError = "offline", sanitizeSSHError(dialErr.Error())
 	}
 	tx, err := s.db.Begin(r.Context())
 	var snapshot *healthSnapshotResponse
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE servers SET status=$3,last_error=$4,last_checked_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2`, id, authFrom(r.Context()).WorkspaceID, status, lastError)
 	}
-	if err == nil && health {
+	if err == nil {
 		snapshot = &healthSnapshotResponse{Status: status, LatencyMS: latency, Error: lastError}
 		err = tx.QueryRow(r.Context(), `INSERT INTO server_health_snapshots(id,server_id,status,latency_ms,cpu_percent,memory_percent,disk_percent,error) VALUES($1,$2,$3,$4,0,0,0,$5) RETURNING checked_at`, uuid.New(), id, status, latency, lastError).Scan(&snapshot.CapturedAt)
 	}
-	action := "Server connection tested"
-	if health {
-		action = "Server health checked"
-	}
 	if err == nil {
-		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "servers", action, id, host, map[string]any{"status": status, "latency_ms": latency})
+		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "servers", "Server health checked", id, host, map[string]any{"status": status, "latency_ms": latency, "tcp_only": true})
 	}
 	if err == nil {
 		err = tx.Commit(r.Context())
@@ -277,11 +360,7 @@ func (s *server) checkServer(w http.ResponseWriter, r *http.Request, health bool
 		s.dbError(w, r, err)
 		return
 	}
-	if health {
-		s.writeJSON(w, 200, map[string]any{"snapshot": snapshot, "tcp_only": true})
-		return
-	}
-	s.writeJSON(w, 200, map[string]any{"status": status, "latency_ms": latency, "error": lastError, "tcp_only": true})
+	s.writeJSON(w, 200, map[string]any{"snapshot": snapshot, "tcp_only": true})
 }
 
 func summarizeServers(servers []serverResponse) map[string]int {
@@ -309,7 +388,7 @@ func (s *server) latestSnapshot(ctx context.Context, serverID uuid.UUID) (*healt
 	return &snapshot, nil
 }
 
-func encryptPrivateKey(encodedKey, plaintext string) ([]byte, error) {
+func encryptServerCredential(encodedKey, plaintext string) ([]byte, error) {
 	key, err := base64.StdEncoding.DecodeString(encodedKey)
 	if err != nil || len(key) != 32 {
 		return nil, errors.New("SERVER_KEY_ENCRYPTION_KEY must be base64-encoded 32 bytes")
@@ -327,4 +406,134 @@ func encryptPrivateKey(encodedKey, plaintext string) ([]byte, error) {
 		return nil, err
 	}
 	return gcm.Seal(nonce, nonce, []byte(plaintext), nil), nil
+}
+
+// encryptPrivateKey remains for callers using the legacy helper name.
+func encryptPrivateKey(encodedKey, plaintext string) ([]byte, error) {
+	return encryptServerCredential(encodedKey, plaintext)
+}
+
+func decryptServerCredential(encodedKey string, ciphertext []byte) (string, error) {
+	key, err := base64.StdEncoding.DecodeString(encodedKey)
+	if err != nil || len(key) != 32 {
+		return "", errors.New("SERVER_KEY_ENCRYPTION_KEY must be base64-encoded 32 bytes")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(ciphertext) < gcm.NonceSize() {
+		return "", errors.New("invalid server credential ciphertext")
+	}
+	plaintext, err := gcm.Open(nil, ciphertext[:gcm.NonceSize()], ciphertext[gcm.NonceSize():], nil)
+	if err != nil {
+		return "", errors.New("invalid server credential ciphertext")
+	}
+	return string(plaintext), nil
+}
+
+type sshConnectionTarget struct {
+	Host, SSHUser, AuthMethod, HostFingerprint string
+	Port                                       int
+}
+
+type sshConnectionResult struct {
+	Status              string `json:"status"`
+	LatencyMS           int    `json:"latency_ms"`
+	AuthMethod          string `json:"auth_method"`
+	FingerprintVerified bool   `json:"fingerprint_verified"`
+	HostFingerprint     string `json:"host_fingerprint"`
+	Error               string `json:"error,omitempty"`
+}
+
+func offlineSSHResult(target sshConnectionTarget, message string) sshConnectionResult {
+	return sshConnectionResult{Status: "offline", AuthMethod: target.AuthMethod, HostFingerprint: target.HostFingerprint, Error: sanitizeSSHError(message)}
+}
+
+func testSSHConnection(ctx context.Context, target sshConnectionTarget, secret string) sshConnectionResult {
+	started := time.Now()
+	result := offlineSSHResult(target, "SSH connection failed")
+	var auth ssh.AuthMethod
+	if target.AuthMethod == authMethodPassword {
+		auth = ssh.Password(secret)
+	} else {
+		signer, err := ssh.ParsePrivateKey([]byte(secret))
+		if err != nil {
+			result.Error = "invalid SSH private key"
+			return result
+		}
+		auth = ssh.PublicKeys(signer)
+	}
+	observed := ""
+	config := &ssh.ClientConfig{
+		User:    target.SSHUser,
+		Auth:    []ssh.AuthMethod{auth},
+		Timeout: 10 * time.Second,
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			observed = ssh.FingerprintSHA256(key)
+			if target.HostFingerprint != "" && observed != target.HostFingerprint {
+				return errors.New("SSH host fingerprint mismatch")
+			}
+			return nil
+		},
+	}
+	dialer := net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(target.Host, strconv.Itoa(target.Port)))
+	if err != nil {
+		result.Error = sanitizeSSHError(err.Error())
+		result.LatencyMS = int(time.Since(started).Milliseconds())
+		return result
+	}
+	defer conn.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	_ = conn.SetDeadline(deadline)
+	clientConn, channels, requests, err := ssh.NewClientConn(conn, net.JoinHostPort(target.Host, strconv.Itoa(target.Port)), config)
+	result.LatencyMS = int(time.Since(started).Milliseconds())
+	if observed != "" {
+		result.HostFingerprint = observed
+	}
+	if err != nil {
+		result.Error = sanitizeSSHError(err.Error())
+		return result
+	}
+	client := ssh.NewClient(clientConn, channels, requests)
+	_ = client.Close()
+	result.Status = "online"
+	result.Error = ""
+	result.FingerprintVerified = target.HostFingerprint != "" && observed == target.HostFingerprint
+	return result
+}
+
+func sanitizeSSHError(message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "fingerprint mismatch"):
+		return "SSH host fingerprint mismatch"
+	case strings.Contains(lower, "unable to authenticate") || strings.Contains(lower, "no auth"):
+		return "SSH authentication failed"
+	case strings.Contains(lower, "context canceled") || strings.Contains(lower, "operation was canceled"):
+		return "SSH connection canceled"
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
+		return "SSH connection timed out"
+	}
+	message = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return ' '
+		}
+		return r
+	}, message)
+	if len(message) > 300 {
+		message = message[:300]
+	}
+	if strings.TrimSpace(message) == "" {
+		return "SSH connection failed"
+	}
+	return message
 }

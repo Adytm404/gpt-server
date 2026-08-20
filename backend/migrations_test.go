@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,26 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestServerAuthMethodMigration(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/008_server_auth_methods.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{
+		"ADD COLUMN IF NOT EXISTS auth_method text NOT NULL DEFAULT 'ssh_key'",
+		"auth_method IN ('ssh_key','password')",
+		"ADD COLUMN IF NOT EXISTS password_ciphertext bytea",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("008 migration missing %q", clause)
+		}
+	}
+	if strings.Contains(content, "password_ciphertext bytea NOT NULL") {
+		t.Fatal("008 migration makes password ciphertext non-nullable")
 	}
 }
 

@@ -3,7 +3,15 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ServerDetailPage, ServersPage } from './ServersPages'
 
-const server = { id: 'srv-1', name: 'Production API', host: 'api.example.com', port: 22, ssh_user: 'deploy', environment: 'production', status: 'online', region: 'sgp-1', host_fingerprint: 'SHA256:test' }
+const server = { id: 'srv-1', name: 'Production API', host: 'api.example.com', port: 22, ssh_user: 'deploy', auth_method: 'ssh_key', environment: 'production', status: 'online', region: 'sgp-1', host_fingerprint: 'SHA256:test' }
+
+async function openFilledModal(authMethod: 'ssh_key' | 'password' = 'ssh_key') {
+  await screen.findByText('No servers connected.')
+  await userEvent.click(screen.getByRole('button', { name: /Add server/ }))
+  await userEvent.type(screen.getByLabelText('Server name'), 'Production API')
+  await userEvent.type(screen.getByLabelText('Hostname or IP'), 'api.example.com')
+  if (authMethod === 'password') await userEvent.click(screen.getByRole('tab', { name: 'Password' }))
+}
 
 describe('server pages', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -25,10 +33,42 @@ describe('server pages', () => {
     expect(screen.queryByRole('button', { name: 'Healthy' })).not.toBeInTheDocument()
   })
 
-  it('reloads persisted server immediately after create before verification', async () => {
+  it('shows accessible auth tabs, defaults to key, and switches credential fields', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ servers: [], summary: { total: 0, online: 0, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    await openFilledModal()
+
+    expect(screen.getByRole('tab', { name: 'SSH key' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Password' })).toBeVisible()
+    expect(screen.getByLabelText('Private key')).toBeVisible()
+    expect(screen.queryByLabelText('SSH password')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Password' }))
+    expect(screen.getByLabelText('SSH password')).toHaveAttribute('type', 'password')
+    expect(screen.queryByLabelText('Private key')).not.toBeInTheDocument()
+  })
+
+  it('does not create when draft SSH test fails', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/test-draft')) return new Response(JSON.stringify({ error: 'authentication failed' }), { status: 422, headers: { 'Content-Type': 'application/json' } })
+      if (url.endsWith('/api/v1/servers') && init?.method === 'GET') return new Response(JSON.stringify({ servers: [], summary: { total: 0, online: 0, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    await openFilledModal()
+    await userEvent.type(screen.getByLabelText('Private key'), 'test-private-key')
+    await userEvent.click(screen.getByRole('button', { name: /Test & add server/ }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('authentication failed')
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+  })
+
+  it('tests password then creates with password only', async () => {
     let listCalls = 0
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
+      if (url.endsWith('/test-draft')) return new Response(JSON.stringify({ success: true, auth_method: 'password', latency_ms: 42 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       if (url.endsWith('/api/v1/servers') && init?.method === 'POST') return new Response(JSON.stringify(server), { status: 201, headers: { 'Content-Type': 'application/json' } })
       if (url.endsWith('/api/v1/servers')) {
         listCalls += 1
@@ -37,16 +77,38 @@ describe('server pages', () => {
       throw new Error(`Unexpected request: ${url}`)
     })
     render(<MemoryRouter><ServersPage /></MemoryRouter>)
-    await screen.findByText('No servers connected.')
-    await userEvent.click(screen.getByRole('button', { name: /Add server/ }))
-    await userEvent.type(screen.getByLabelText('Server name'), 'Production API')
-    await userEvent.type(screen.getByLabelText('Hostname or IP'), 'api.example.com')
-    await userEvent.type(screen.getByLabelText('Private key'), 'test-private-key')
-    await userEvent.click(screen.getByRole('button', { name: /Create server/ }))
-    expect(await screen.findByText('Server created')).toBeInTheDocument()
+    await openFilledModal('password')
+    await userEvent.type(screen.getByLabelText('SSH password'), 'test-password')
+    await userEvent.click(screen.getByRole('button', { name: /Test & add server/ }))
+    expect(await screen.findByText('Server saved')).toBeInTheDocument()
+    expect(screen.getByText(/Password authentication verified in 42 ms/)).toBeInTheDocument()
     await waitFor(() => expect(listCalls).toBe(2))
-    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/api/v1/servers') && init?.method === 'POST')).toBe(true)
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(posts.map(([url]) => String(url).split('/').pop())).toEqual(['test-draft', 'servers'])
+    for (const [, init] of posts) {
+      const body = JSON.parse(String(init?.body))
+      expect(body).toMatchObject({ auth_method: 'password', password: 'test-password' })
+      expect(body).not.toHaveProperty('private_key')
+    }
     expect(screen.getByText('of 1 servers')).toBeInTheDocument()
+  })
+
+  it('tests and creates SSH key servers without sending password', async () => {
+    const bodies: Record<string, unknown>[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (init?.method === 'GET') return new Response(JSON.stringify({ servers: [], summary: { total: 0, online: 0, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      bodies.push(JSON.parse(String(init?.body)))
+      if (url.endsWith('/test-draft')) return new Response(JSON.stringify({ success: true, auth_method: 'ssh_key', latency_ms: 9 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify(server), { status: 201, headers: { 'Content-Type': 'application/json' } })
+    })
+    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    await openFilledModal()
+    await userEvent.type(screen.getByLabelText('Private key'), 'test-private-key')
+    await userEvent.click(screen.getByRole('button', { name: /Test & add server/ }))
+    expect(await screen.findByText('Server saved')).toBeInTheDocument()
+    expect(bodies).toHaveLength(2)
+    expect(bodies.every(body => body.auth_method === 'ssh_key' && body.private_key === 'test-private-key' && !('password' in body))).toBe(true)
   })
 
   it('renders detail empty metrics and calls health endpoint', async () => {
@@ -73,7 +135,7 @@ describe('server pages', () => {
       ? { status: 'offline', error: 'connection refused' }
       : server), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
-    await userEvent.click(await screen.findByRole('button', { name: 'Test network endpoint' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Test SSH connection' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('connection refused')
     expect(screen.getByText('Production API')).toBeInTheDocument()
     expect(screen.queryByText('connection refused', { selector: '.health-banner *' })).not.toBeInTheDocument()

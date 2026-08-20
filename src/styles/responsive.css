@@ -58,7 +58,7 @@
   .modal-layer { padding: 0; align-items: end; }
   .modal-card { border-radius: 18px 18px 0 0; max-height: 94vh; overflow-y: auto; }
   .form-grid { grid-template-columns: 1fr; }
-  .field.full,.security-note.full { grid-column: auto; }
+  .field.full,.security-note.full,.auth-method.full { grid-column: auto; }
   .step span { display: none; }
   .stepper { padding-left: 50px; padding-right: 50px; }
   .step { justify-content: center; }

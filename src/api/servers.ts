@@ -3,6 +3,7 @@ import { apiRequest, unwrapList, unwrapOne } from './client'
 export type ServerStatus = 'Online' | 'Offline' | 'Unknown'
 export type Server = {
   id: string; name: string; host: string; port: number; username: string
+  authMethod: 'ssh_key' | 'password'
   environment: 'Production' | 'Staging' | 'Development'; status: ServerStatus
   region: string; operatingSystem: string; uptime: string; fingerprint: string
   latestSnapshot: null | { cpuPercent: number; memoryPercent: number; diskPercent: number; capturedAt: string }
@@ -11,6 +12,7 @@ export type Server = {
 
 export type ServerDTO = {
   id: string; name: string; host: string; port: number; ssh_user: string
+  auth_method: 'ssh_key' | 'password'
   environment: 'production' | 'staging' | 'development'; status: 'online' | 'offline' | 'unknown'
   region: string; operating_system?: string; uptime?: string; host_fingerprint: string
   latest_snapshot?: { cpu_percent: number; memory_percent: number; disk_percent: number; captured_at?: string; checked_at?: string } | null
@@ -18,11 +20,23 @@ export type ServerDTO = {
 }
 
 export type ServerSummaryDTO = { total: number; online: number; offline: number; unknown: number }
-export type CreateServerDTO = { name: string; host: string; port: number; username: string; password?: string; private_key?: string; host_fingerprint?: string; environment: string; region?: string }
+export type CreateServerDTO = { name: string; host: string; port: number; username: string; auth_method: 'ssh_key' | 'password'; password?: string; private_key?: string; host_fingerprint?: string; environment: string; region?: string }
+export type ConnectionTestResult = { ok: boolean; message: string; authMethod?: 'ssh_key' | 'password'; latencyMs?: number }
 
 export function serverFromDTO(dto: ServerDTO): Server {
   const title = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
-  return { id: dto.id, name: dto.name, host: dto.host, port: dto.port, username: dto.ssh_user, environment: title(dto.environment) as Server['environment'], status: title(dto.status) as ServerStatus, region: dto.region || '-', operatingSystem: dto.operating_system || '-', uptime: dto.uptime || '-', fingerprint: dto.host_fingerprint || '', latestSnapshot: dto.latest_snapshot ? { cpuPercent: dto.latest_snapshot.cpu_percent, memoryPercent: dto.latest_snapshot.memory_percent, diskPercent: dto.latest_snapshot.disk_percent, capturedAt: dto.latest_snapshot.captured_at || dto.latest_snapshot.checked_at || '' } : null, services: (dto.services || []).map(service => ({ ...service, detail: service.detail || '' })) }
+  return { id: dto.id, name: dto.name, host: dto.host, port: dto.port, username: dto.ssh_user, authMethod: dto.auth_method || 'ssh_key', environment: title(dto.environment) as Server['environment'], status: title(dto.status) as ServerStatus, region: dto.region || '-', operatingSystem: dto.operating_system || '-', uptime: dto.uptime || '-', fingerprint: dto.host_fingerprint || '', latestSnapshot: dto.latest_snapshot ? { cpuPercent: dto.latest_snapshot.cpu_percent, memoryPercent: dto.latest_snapshot.memory_percent, diskPercent: dto.latest_snapshot.disk_percent, capturedAt: dto.latest_snapshot.captured_at || dto.latest_snapshot.checked_at || '' } : null, services: (dto.services || []).map(service => ({ ...service, detail: service.detail || '' })) }
+}
+
+function serverInput(input: CreateServerDTO) {
+  const { username, password, private_key, ...fields } = input
+  const credential = input.auth_method === 'password' ? { password } : { private_key }
+  return { ...fields, ...credential, ssh_user: username, region: input.region || '' }
+}
+
+function connectionResult(result: { success?: boolean; ok?: boolean; status?: string; error?: string; message?: string; auth_method?: 'ssh_key' | 'password'; latency_ms?: number }): ConnectionTestResult {
+  const ok = result.success ?? result.ok ?? ['ok', 'online', 'success', 'verified'].includes(result.status || '')
+  return { ok, message: result.error || result.message || (ok ? 'SSH connection successful' : 'SSH connection failed'), authMethod: result.auth_method, latencyMs: result.latency_ms }
 }
 
 export const serversApi = {
@@ -31,8 +45,9 @@ export const serversApi = {
     return { servers: unwrapList<ServerDTO>(body, 'servers').map(serverFromDTO), summary: !Array.isArray(body) ? body.summary : undefined }
   },
   async get(id: string) { return serverFromDTO(unwrapOne<ServerDTO>(await apiRequest(`/api/v1/servers/${encodeURIComponent(id)}`), 'server')) },
-  async create(input: CreateServerDTO) { const { username, password: _password, ...fields } = input; return serverFromDTO(unwrapOne<ServerDTO>(await apiRequest('/api/v1/servers', { method: 'POST', body: JSON.stringify({ ...fields, ssh_user: username, region: input.region || '' }) }), 'server')) },
-  async testConnection(id: string) { const result = await apiRequest<{ status: string; error?: string }>(`/api/v1/servers/${encodeURIComponent(id)}/test`, { method: 'POST' }); return { ok: result.status === 'online', message: result.error || `Network endpoint ${result.status}` } },
+  async create(input: CreateServerDTO) { return serverFromDTO(unwrapOne<ServerDTO>(await apiRequest('/api/v1/servers', { method: 'POST', body: JSON.stringify(serverInput(input)) }), 'server')) },
+  async testDraft(input: CreateServerDTO) { return connectionResult(await apiRequest('/api/v1/servers/test-draft', { method: 'POST', body: JSON.stringify(serverInput(input)) })) },
+  async testConnection(id: string) { return connectionResult(await apiRequest(`/api/v1/servers/${encodeURIComponent(id)}/test`, { method: 'POST' })) },
   async healthCheck(id: string) { await apiRequest(`/api/v1/servers/${encodeURIComponent(id)}/health-check`, { method: 'POST' }); return serversApi.get(id) },
   async remove(id: string) { return apiRequest<void>(`/api/v1/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
 }
