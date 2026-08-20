@@ -11,6 +11,8 @@ import {
 import { executionLogs, servers, type Server } from './data'
 import AdminConsole from './admin/AdminConsole'
 import { clearSessionCache, SessionProvider, useSession } from './auth/SessionContext'
+import ApiPricingPage from './pricing/PricingPage'
+import { ServersPage as ApiServersPage, ServerDetailPage as ApiServerDetailPage } from './servers/ServersPages'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
 const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/$/, '')
@@ -169,8 +171,8 @@ function AppShell() {
   return <div className={cn('app-shell', sidebarExpanded && 'sidebar-expanded')}><Sidebar open={menuOpen} close={() => setMenuOpen(false)} expanded={sidebarExpanded} toggle={toggleSidebar} /><div className="app-body"><Topbar menu={() => setMenuOpen(true)} /><main><Routes>
     <Route path="/chat" element={<HomePage />} />
     <Route path="/chat/:id" element={<ThreadPage />} />
-    <Route path="/servers" element={<ServersPage />} />
-    <Route path="/servers/:id" element={<ServerDetailPage />} />
+    <Route path="/servers" element={<ApiServersPage />} />
+    <Route path="/servers/:id" element={<ApiServerDetailPage />} />
     <Route path="/executions" element={<ExecutionsPage />} />
     <Route path="/settings" element={<SettingsPage />} />
     <Route path="/profile" element={<ProfilePage />} />
@@ -226,7 +228,7 @@ function LandingPage() {
   </div>
 }
 
-function PricingPage() {
+function LegacyPricingPage() {
   const [annual, setAnnual] = useState(true)
   const plans = [
     { name: 'Operator', eyebrow: 'For solo builders', monthly: 19, annual: 15, description: 'Essential AI operations for a focused server stack.', features: ['3 connected servers', '150 AI operations / month', 'Approval-first execution', '7-day execution history', 'Community support'] },
@@ -289,7 +291,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
 }
 
 function App() {
-  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<PricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
+  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<ApiPricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
 }
 
 function StatusPill({ status }: { status: Server['status'] }) {

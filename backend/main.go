@@ -41,14 +41,16 @@ const (
 type config struct {
 	addr, frontendOrigin                              string
 	dbHost, dbPort, dbUser, dbName, dbPassword, dbSSL string
+	serverKeyEncryptionKey                            string
 	sessionTTL                                        time.Duration
 	cookieSecure                                      bool
 }
 
 type server struct {
-	db      *pgxpool.Pool
-	cfg     config
-	limiter *loginLimiter
+	db             *pgxpool.Pool
+	cfg            config
+	limiter        *loginLimiter
+	resolveSession func(context.Context, string) (sessionAuth, error)
 }
 
 type loginLimiter struct {
@@ -137,14 +139,15 @@ func main() {
 
 func loadConfig() (config, error) {
 	cfg := config{
-		addr:           env("APP_ADDR", ":8080"),
-		frontendOrigin: strings.TrimRight(env("APP_FRONTEND_ORIGIN", "http://localhost:5173"), "/"),
-		dbHost:         env("DB_HOST", "sagara.zenhosta.com"),
-		dbPort:         env("DB_PORT", "5432"),
-		dbUser:         env("DB_USER", "sagara123_gpt_server_user"),
-		dbName:         env("DB_NAME", "sagara123_gpt_server"),
-		dbPassword:     os.Getenv("DB_PASSWORD"),
-		dbSSL:          env("DB_SSLMODE", "disable"),
+		addr:                   env("APP_ADDR", ":8080"),
+		frontendOrigin:         strings.TrimRight(env("APP_FRONTEND_ORIGIN", "http://localhost:5173"), "/"),
+		dbHost:                 env("DB_HOST", "sagara.zenhosta.com"),
+		dbPort:                 env("DB_PORT", "5432"),
+		dbUser:                 env("DB_USER", "sagara123_gpt_server_user"),
+		dbName:                 env("DB_NAME", "sagara123_gpt_server"),
+		dbPassword:             os.Getenv("DB_PASSWORD"),
+		dbSSL:                  env("DB_SSLMODE", "disable"),
+		serverKeyEncryptionKey: os.Getenv("SERVER_KEY_ENCRYPTION_KEY"),
 	}
 	var err error
 	cfg.sessionTTL, err = time.ParseDuration(env("SESSION_TTL", "720h"))
@@ -181,81 +184,6 @@ func databaseURL(cfg config) string {
 	return u.String()
 }
 
-func migrate(ctx context.Context, db *pgxpool.Pool) error {
-	const migration = `
-CREATE TABLE IF NOT EXISTS users (
-    id uuid PRIMARY KEY,
-    full_name text NOT NULL,
-    display_name text NOT NULL DEFAULT '',
-    email text NOT NULL,
-    password_hash text NOT NULL,
-	platform_role text NOT NULL DEFAULT 'user' CONSTRAINT users_platform_role_check CHECK (platform_role IN ('user', 'admin')),
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name text;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name text NOT NULL DEFAULT '';
-ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS platform_role text DEFAULT 'user';
-UPDATE users SET platform_role = 'user' WHERE platform_role IS NULL;
-ALTER TABLE users ALTER COLUMN platform_role SET DEFAULT 'user';
-ALTER TABLE users ALTER COLUMN platform_role SET NOT NULL;
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conrelid = 'users'::regclass
-          AND conname = 'users_platform_role_check'
-    ) THEN
-        ALTER TABLE users
-            ADD CONSTRAINT users_platform_role_check
-            CHECK (platform_role IN ('user', 'admin'));
-    END IF;
-END $$;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
-ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
-CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_idx ON users (lower(email));
-
-CREATE TABLE IF NOT EXISTS workspaces (
-    id uuid PRIMARY KEY,
-    name text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS name text;
-ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
-ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
-
-CREATE TABLE IF NOT EXISTS workspace_memberships (
-    workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role text NOT NULL DEFAULT 'owner',
-    created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (workspace_id, user_id)
-);
-ALTER TABLE workspace_memberships ADD COLUMN IF NOT EXISTS role text DEFAULT 'member';
-ALTER TABLE workspace_memberships ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
-CREATE INDEX IF NOT EXISTS workspace_memberships_user_idx ON workspace_memberships (user_id);
-
-CREATE TABLE IF NOT EXISTS sessions (
-    id uuid PRIMARY KEY,
-    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    token_hash bytea NOT NULL,
-    expires_at timestamptz NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT now()
-);
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS token_hash bytea;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS expires_at timestamptz;
-ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now();
-CREATE UNIQUE INDEX IF NOT EXISTS sessions_token_hash_idx ON sessions (token_hash);
-CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions (user_id);
-CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions (expires_at);`
-	_, err := db.Exec(ctx, migration)
-	return err
-}
-
 func (s *server) routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -276,6 +204,15 @@ func (s *server) routes() http.Handler {
 		r.Post("/auth/login", s.requireOrigin(s.login))
 		r.Post("/auth/logout", s.requireOrigin(s.logout))
 		r.Get("/me", s.me)
+		r.Get("/public/plans", s.listPublicPlans)
+		r.Group(func(r chi.Router) {
+			r.Use(s.authenticate)
+			r.Route("/servers", s.serverRoutes)
+			r.Route("/admin", func(r chi.Router) {
+				r.Use(s.requireAdmin)
+				s.adminRoutes(r)
+			})
+		})
 	})
 	return r
 }
@@ -309,7 +246,7 @@ func (s *server) cors(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.Header().Add("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {

@@ -1,0 +1,18 @@
+import { useCallback, useEffect, useState } from 'react'
+import { ArrowRight, Check, History, KeyRound, ShieldCheck } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
+import { listPublicPlans, type Plan } from '../api/admin'
+
+const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
+const formatPrice = (cents: number) => (cents / 100).toFixed(2)
+
+function BrandMark() { return <div className="brand-mark" aria-label="OpsAI"><span /><span /><span /><span /></div> }
+
+export default function PricingPage() {
+  const [annual, setAnnual] = useState(true); const [plans, setPlans] = useState<Plan[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState('')
+  const load = useCallback(async () => { setLoading(true); setError(''); try { setPlans(await listPublicPlans()) } catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to load plans') } finally { setLoading(false) } }, [])
+  useEffect(() => { void load() }, [load])
+  return <div className="landing-page pricing-page"><nav className="landing-nav"><NavLink to="/" className="landing-brand"><BrandMark /><span>OpsAI</span></NavLink><div className="landing-links"><NavLink to="/">Product</NavLink><NavLink to="/pricing" className="active">Pricing</NavLink></div><NavLink to="/chat" className="button dark">Open workspace <ArrowRight size={15} /></NavLink></nav><main><section className="pricing-hero"><div className="landing-grid" /><div className="eyebrow"><span className="live-dot" /> Simple, operational pricing</div><h1>Control every server.<br /><em>Scale when ready.</em></h1><p>Start with enough capacity to operate confidently. Upgrade as infrastructure and team grow.</p><div className="billing-toggle" aria-label="Billing period"><button className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly</button><button className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual</button></div></section>
+    {loading ? <section className="pricing-api-state"><span className="tiny-spinner" /> Loading plans...</section> : error ? <section className="pricing-api-state error" role="alert"><span>{error}</span><button className="button secondary" onClick={() => void load()}>Retry</button></section> : plans.length === 0 ? <section className="pricing-api-state">No public plans available.</section> : <section className="pricing-grid">{plans.map((plan, index) => <article className={cn('pricing-card', index === 1 && 'featured')} key={plan.id}>{index === 1 && <span className="popular-label">Most operational</span>}<span className="page-eyebrow">Up to {plan.maxServers} servers</span><h2>{plan.name}</h2><p>{plan.description}</p><div className="plan-price"><span>$</span><strong>{formatPrice(annual ? plan.annualPriceCents : plan.priceCents)}</strong><small>/ workspace / month</small></div><small className="billing-note">{annual ? 'Billed annually' : 'Billed monthly'}</small><NavLink to="/chat" className={cn('button', index === 1 ? 'accent' : 'secondary')}>Start with {plan.name} <ArrowRight size={14} /></NavLink><div className="plan-features"><span>INCLUDED</span>{plan.features.map(feature => <p key={feature}><Check size={13} /> {feature}</p>)}</div></article>)}</section>}
+    <section className="pricing-trust"><div><ShieldCheck size={20} /><span><b>Approval-first by default</b><small>No hidden command execution on any plan.</small></span></div><div><KeyRound size={20} /><span><b>Secure SSH access</b><small>Managed keys and explicit server scope.</small></span></div><div><History size={20} /><span><b>Operational evidence</b><small>Commands, output, and decisions stay together.</small></span></div></section></main></div>
+}
