@@ -2,7 +2,7 @@
   .landing-hero { grid-template-columns: 1fr; padding-top: 65px; }.landing-copy { max-width: 700px; }.landing-chat-preview { max-width: 720px; width: 100%; margin: auto; transform: none; }.landing-status { overflow-x: auto; }
   .suggestion-grid { grid-template-columns: repeat(2,1fr); }
   .server-list-head, .server-row { grid-template-columns: minmax(220px,1.4fr) 100px minmax(180px,1fr) 90px 16px; gap: 12px; }
-  .server-facts { grid-template-columns: repeat(3,1fr); }.server-facts>div:nth-child(3) { border-right: 0; }.server-facts>div:nth-child(n+4) { border-top: 1px solid var(--line); }
+  .server-facts { grid-template-columns: repeat(3,1fr); }.server-facts>div:nth-child(3) { border-right: 0; }.server-facts>div:nth-child(n+4) { border-top: 1px solid var(--line); }.specification-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .thread-layout { grid-template-columns: minmax(0,56%) minmax(320px,44%); }
   .pricing-card { padding: 31px 22px; }.pricing-trust { margin-left: 30px; margin-right: 30px; }
   .auth-page { grid-template-columns: minmax(430px,55%) 1fr; }.auth-visual { padding: 35px; }.auth-operation { margin-top: 25px; }
@@ -90,7 +90,7 @@
   .page-heading { flex-direction: column; }
   .page-heading .button { width: 100%; }
   .status-pill { font-size: 0; }
-  .server-detail-head { flex-direction: column; }.server-title { align-items: flex-start; }.title-line { align-items: flex-start; }.title-line h1 { font-size: 24px; }.heading-actions { width: 100%; }.heading-actions .button { flex: 1; font-size: 8px; }.server-facts { grid-template-columns: 1fr; }.server-facts>div,.server-facts>div:nth-child(odd) { grid-column: auto; border-right: 0; border-top: 1px solid var(--line); }.server-facts>div:first-child { border-top: 0; }.health-banner { align-items: flex-start; gap: 8px; }.health-banner button { font-size: 0; }.detail-section-head { align-items: flex-start; }.detail-section-head>span { margin-top: 4px; }.service-row { grid-template-columns: 32px minmax(0,1fr) auto; }.service-row .row-action { display: none; }.activity-row>em { display: none; }
+  .server-detail-head { flex-direction: column; }.server-title { align-items: flex-start; }.title-line { align-items: flex-start; }.title-line h1 { font-size: 24px; }.heading-actions { width: 100%; }.heading-actions .button { flex: 1; font-size: 8px; }.server-facts { grid-template-columns: 1fr; }.server-facts>div,.server-facts>div:nth-child(odd) { grid-column: auto; border-right: 0; border-top: 1px solid var(--line); }.server-facts>div:first-child { border-top: 0; }.specification-grid { grid-template-columns: 1fr; }.health-banner { align-items: flex-start; gap: 8px; }.health-banner button { font-size: 0; }.detail-section-head { align-items: flex-start; }.detail-section-head>span { margin-top: 4px; }.service-row { grid-template-columns: 32px minmax(0,1fr) auto; }.service-row .row-action { display: none; }.activity-row>em { display: none; }
   .check-list { grid-template-columns: 1fr; }
   .modal-body { min-height: 360px; }
   .account-heading { flex-direction: column; }.account-heading .button { width: 100%; }.setting-row { grid-template-columns: 32px 1fr; }.setting-row>div { grid-column: 2; justify-content: flex-start; }.profile-meta { grid-template-columns: 1fr; }.profile-meta p { text-align: left; border-bottom: 1px solid var(--line); }

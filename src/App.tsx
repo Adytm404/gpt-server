@@ -8,14 +8,15 @@ import {
   FileClock, Layers3, LogOut, Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
   Settings, ShieldCheck, Sparkles, Square, Terminal, UserRound, X, Zap,
 } from 'lucide-react'
-import { executionLogs, servers, type Server } from './data'
+import { servers, type Server } from './data'
 import AdminConsole from './admin/AdminConsole'
 import { clearSessionCache, SessionProvider, useSession } from './auth/SessionContext'
+import { API_URL } from './api/client'
 import ApiPricingPage from './pricing/PricingPage'
 import { ServersPage as ApiServersPage, ServerDetailPage as ApiServerDetailPage } from './servers/ServersPages'
+import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage as ApiExecutionsPage, RecentChats, WorkspaceAIUsage } from './chat/ChatPages'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
-const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/$/, '')
 
 async function apiError(response: Response) {
   try {
@@ -89,13 +90,6 @@ const primaryNav = [
   { to: '/executions', icon: Terminal, label: 'Executions' },
 ]
 
-const recentChats = [
-  { id: 'diagnose', title: 'Diagnose worker CPU', server: 'Production API', time: '2m' },
-  { id: 'nginx-errors', title: 'Review nginx 502 errors', server: 'Production API', time: '1h' },
-  { id: 'docker-restarts', title: 'Inspect Docker restarts', server: 'Worker Primary', time: '1d' },
-  { id: 'backup-check', title: 'Verify PostgreSQL backups', server: 'Staging Web', time: '3d' },
-]
-
 function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () => void; expanded: boolean; toggle: () => void }) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -121,6 +115,7 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       <div className="admin-sidebar-label"><span>Platform control</span><small>Global configuration</small></div>
       <nav className="nav-stack" aria-label="Platform administration">
         <NavLink to="/admin/models" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Bot size={18} /><span className="nav-label">Models</span><span className="tooltip">Models</span></NavLink>
+        <NavLink to="/admin/workspaces" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Boxes size={18} /><span className="nav-label">Workspaces</span><span className="tooltip">Workspaces</span></NavLink>
         <NavLink to="/admin/plans" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Layers3 size={18} /><span className="nav-label">Plans</span><span className="tooltip">Plans</span></NavLink>
         <NavLink to="/admin/history" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><FileClock size={18} /><span className="nav-label">Change history</span><span className="tooltip">Change history</span></NavLink>
       </nav>
@@ -139,12 +134,12 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       <nav className="nav-stack" aria-label="Main navigation">
         {primaryNav.map(({ to, icon: Icon, label }) => <NavLink key={to} to={to} onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Icon size={18} /><span className="nav-label">{label}</span><span className="tooltip">{label}</span></NavLink>)}
       </nav>
-      <div className="sidebar-history"><div><span>Recent chats</span><NavLink to="/chat" aria-label="New chat"><Plus size={14} /></NavLink></div>{recentChats.map(chat => <NavLink key={chat.id} to={`/chat/${chat.id}?server=${chat.id === 'docker-restarts' ? 'worker-primary' : chat.id === 'backup-check' ? 'staging-web' : 'production-api'}`} onClick={close} className={({ isActive }) => cn('history-link', isActive && 'active')}><MessageSquare size={13} /><span><b>{chat.title}</b><small>{chat.server}</small></span><em>{chat.time}</em></NavLink>)}</div>
+      <RecentChats />
       <div className="sidebar-bottom">
         <button className="nav-icon" onClick={() => openDemo('help', 'Help & resources', 'Find guidance without leaving your workspace.')}><CircleHelp size={18} /><span className="nav-label">Help</span><span className="tooltip">Help</span></button>
         <NavLink to="/settings" className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Settings size={18} /><span className="nav-label">Settings</span><span className="tooltip">Settings</span></NavLink>
         {session?.user.platform_role === 'admin' && <NavLink to="/admin/models" className={cn('nav-icon', 'admin-nav-link', location.pathname.startsWith('/admin') && 'active')}><ShieldCheck size={18} /><span className="nav-label">Platform admin</span><span className="tooltip">Platform admin</span></NavLink>}
-        <div className="sidebar-plan"><div><span><Zap size={13} /> Control plan</span><b>68% used</b></div><i><b /></i><p>680 of 1,000 operations</p><NavLink to="/pricing">Manage plan <ArrowRight size={12} /></NavLink></div>
+        <WorkspaceAIUsage admin={session?.user.platform_role === 'admin'} />
         <NavLink to="/profile" className="profile-link" aria-label="Profile"><span className="avatar">{initials}</span><span><b>{session?.user.full_name || 'Account'}</b><small>{session?.workspace.role ? `Workspace ${session.workspace.role}` : session?.user.email}</small></span><ChevronRight size={14} /></NavLink>
         <button className="nav-icon" onClick={logout} disabled={loggingOut}><LogOut size={18} /><span className="nav-label">{loggingOut ? 'Signing out...' : 'Sign out'}</span><span className="tooltip">Sign out</span></button>
       </div>
@@ -159,8 +154,8 @@ function Topbar({ menu }: { menu: () => void }) {
   const adminMode = location.pathname.startsWith('/admin')
   const section = location.pathname.startsWith('/admin') ? 'Platform admin' : location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
   return <header className="topbar">
-    <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button>{adminMode ? <span className="workspace-picker admin-context"><ShieldCheck size={14} /> Platform control</span> : <button className="workspace-picker" onClick={() => openDemo('workspace', 'Switch workspace', 'Select where you want to operate.')}><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'} <ChevronDown size={14} /></button>}<span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
-    <div className="topbar-actions"><button className="icon-button mobile-hide" onClick={() => openDemo('search', adminMode ? 'Search platform settings' : 'Search workspace')} aria-label="Search"><Search size={17} /></button><button className="icon-button" onClick={() => openDemo('notifications', 'Notifications', adminMode ? 'Recent platform activity.' : 'Recent workspace activity.')} aria-label="Notifications"><Bell size={17} /><i className="notification-dot" /></button>{adminMode ? <NavLink to="/chat" className="button secondary compact"><ArrowLeft size={16} /> <span>Workspace</span></NavLink> : <NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink>}</div>
+    <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button>{adminMode ? <span className="workspace-picker admin-context"><ShieldCheck size={14} /> Platform control</span> : <span className="workspace-picker workspace-context"><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'}</span>}<span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
+    <div className="topbar-actions">{adminMode ? <NavLink to="/chat" className="button secondary compact"><ArrowLeft size={16} /> <span>Workspace</span></NavLink> : <NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink>}</div>
   </header>
 }
 
@@ -168,18 +163,18 @@ function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [sidebarExpanded, setSidebarExpanded] = useState(() => window.localStorage.getItem('sidebar-expanded') === 'true')
   const toggleSidebar = () => setSidebarExpanded(value => { window.localStorage.setItem('sidebar-expanded', String(!value)); return !value })
-  return <div className={cn('app-shell', sidebarExpanded && 'sidebar-expanded')}><Sidebar open={menuOpen} close={() => setMenuOpen(false)} expanded={sidebarExpanded} toggle={toggleSidebar} /><div className="app-body"><Topbar menu={() => setMenuOpen(true)} /><main><Routes>
-    <Route path="/chat" element={<HomePage />} />
-    <Route path="/chat/:id" element={<ThreadPage />} />
+  return <ChatThreadsProvider><div className={cn('app-shell', sidebarExpanded && 'sidebar-expanded')}><Sidebar open={menuOpen} close={() => setMenuOpen(false)} expanded={sidebarExpanded} toggle={toggleSidebar} /><div className="app-body"><Topbar menu={() => setMenuOpen(true)} /><main><Routes>
+    <Route path="/chat" element={<ChatHomePage />} />
+    <Route path="/chat/:id" element={<ChatThreadPage />} />
     <Route path="/servers" element={<ApiServersPage />} />
     <Route path="/servers/:id" element={<ApiServerDetailPage />} />
-    <Route path="/executions" element={<ExecutionsPage />} />
+    <Route path="/executions" element={<ApiExecutionsPage />} />
     <Route path="/settings" element={<SettingsPage />} />
     <Route path="/profile" element={<ProfilePage />} />
     <Route path="/forbidden" element={<ForbiddenPage />} />
     <Route path="/admin/*" element={<PlatformAdminRoute><AdminConsole /></PlatformAdminRoute>} />
     <Route path="*" element={<PlaceholderPage />} />
-  </Routes></main></div></div>
+  </Routes></main></div></div></ChatThreadsProvider>
 }
 
 function PlatformAdminRoute({ children }: { children: React.ReactNode }) {
@@ -503,6 +498,7 @@ function ResourceCard({ label, value, detail, icon: Icon, points }: { label: str
 }
 
 function ThreadPage() {
+  const legacyExecutionPreview: Array<{ type: string; text: string; time: string; delay: number }> = []
   const location = useLocation()
   const params = new URLSearchParams(location.search)
   const prompt = params.get('prompt') || 'Check production health and investigate elevated worker CPU.'
@@ -520,13 +516,13 @@ function ThreadPage() {
     if (stopped) return
     let timeout: number
     const stream = (count: number) => {
-      if (count >= executionLogs.length) { setComplete(true); return }
-      timeout = window.setTimeout(() => { const next = count + 1; setLogCount(next); stream(next) }, executionLogs[count].delay)
+      if (count >= legacyExecutionPreview.length) { setComplete(true); return }
+      timeout = window.setTimeout(() => { const next = count + 1; setLogCount(next); stream(next) }, legacyExecutionPreview[count].delay)
     }
     stream(1)
     return () => window.clearTimeout(timeout)
   }, [stopped])
-  const progress = Math.round((logCount / executionLogs.length) * 100)
+  const progress = legacyExecutionPreview.length ? Math.round((logCount / legacyExecutionPreview.length) * 100) : 0
   return <div className={cn('thread-layout page-enter', terminalMinimized && 'terminal-minimized')}><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation</span><h2>Diagnose server health</h2></div><div className="thread-header-status"><span className="connected"><i /> Connected</span><div className="thread-menu"><button className="icon-button bordered" onClick={() => setThreadMenu(value => !value)} aria-label="Thread actions"><MoreHorizontal size={18} /></button>{threadMenu && <div><button onClick={() => openDemo('edit','Rename thread','Diagnose server health')}>Rename thread</button><button onClick={() => showToast('Thread duplicated')}>Duplicate</button><button onClick={() => showToast('Thread archived')}>Archive</button><button className="danger" onClick={() => openDemo('restart','Delete thread','Diagnose server health')}>Delete</button></div>}</div></div></div>
     <div className="conversation"><div className="chat-history-marker"><span>Today</span></div><div className="message user-message history-message"><div className="message-avatar">AR</div><div><div className="message-meta"><strong>You</strong><span>8 min ago</span></div><p>Give me a quick status summary for {server.name}.</p><span className="target-chip"><ServerIcon size={13} /> {server.name}</span></div></div><div className="message ai-message history-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div><div className="message-meta"><strong>OpsAI</strong><span>completed</span></div><p>Server is online with normal memory and disk usage. Worker CPU remains above its 15-minute baseline.</p><div className="result-tags"><span>Online</span><span>Memory normal</span><span>CPU elevated</span></div></div></div><div className="message user-message"><div className="message-avatar">AR</div><div><div className="message-meta"><strong>You</strong><span>just now</span></div><p>{prompt}</p><div className="message-context"><span className="target-chip"><ServerIcon size={13} /> {server.name}</span><span className="target-chip"><ShieldCheck size={13} /> {policy}</span>{attachment && <span className="target-chip"><FileCode2 size={13} /> {attachment}</span>}</div></div></div>
     <div className="message ai-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong><span>{stopped ? 'stopped' : complete ? 'completed' : 'working...'}</span></div><p>I'll inspect system load, memory pressure, top processes, and service health. Approved read-only plan is running now.</p>
@@ -534,11 +530,11 @@ function ThreadPage() {
       {complete && <div className="result-card"><div className="result-icon"><CheckCircle2 size={20} /></div><div><strong>Health check complete</strong><p>Server is stable. Elevated CPU comes from <code>node dist/worker.js</code>, currently using 31.2%. No failed services found. Memory remains within operating range.</p><div className="result-tags"><span>CPU stable</span><span>Services healthy</span><span>No action required</span></div></div></div>}
     </div></div></div><div className="thread-composer"><Composer compact initialServer={server.id} /></div></section>
     <button className="terminal-edge-toggle" onClick={() => setTerminalMinimized(value => !value)} aria-label={terminalMinimized ? 'Open terminal preview' : 'Hide terminal preview'}><Terminal size={14} /><ChevronRight size={12} /></button>
-    {!terminalMinimized && <ExecutionPanel active logs={executionLogs.slice(0, logCount)} complete={complete} server={server} stopped={stopped} onStop={() => { setStopped(true); setComplete(true); showToast('Execution stopped by user') }} />}
+    {!terminalMinimized && <ExecutionPanel active logs={legacyExecutionPreview.slice(0, logCount)} complete={complete} server={server} stopped={stopped} onStop={() => { setStopped(true); setComplete(true); showToast('Execution stopped by user') }} />}
   </div>
 }
 
-function ExecutionPanel({ active, logs, complete, server, stopped, onStop }: { active: boolean; logs: typeof executionLogs; complete: boolean; server: Server; stopped: boolean; onStop: () => void }) {
+function ExecutionPanel({ active, logs, complete, server, stopped, onStop }: { active: boolean; logs: Array<{ type: string; text: string; time: string }>; complete: boolean; server: Server; stopped: boolean; onStop: () => void }) {
   const terminalEnd = useRef<HTMLDivElement>(null)
   const [filter, setFilter] = useState<'session' | 'stderr'>('session')
   const [menu, setMenu] = useState(false)

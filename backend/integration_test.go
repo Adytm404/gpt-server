@@ -118,3 +118,119 @@ func TestIntegrationDraftSlugAndPublishedModelDependency(t *testing.T) {
 		t.Fatalf("published model dependency used=%v err=%v", used, err)
 	}
 }
+
+func TestIntegrationChatTenantIsolationAndOperationState(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	userID, workspaceID, otherWorkspaceID, serverID, modelID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO users(id,full_name,display_name,email,password_hash) VALUES($1,'Chat User','Chat User',$2,'test')`, []any{userID, userID.String() + "@chat.test"}},
+		{`INSERT INTO workspaces(id,name) VALUES($1,'Chat Workspace'),($2,'Other Workspace')`, []any{workspaceID, otherWorkspaceID}},
+		{`INSERT INTO servers(id,workspace_id,name,host,port,ssh_user,environment) VALUES($1,$2,'API','127.0.0.1',22,'deploy','development')`, []any{serverID, workspaceID}},
+		{`INSERT INTO ai_models(id,external_model_id,name,provider,base_url,context_window) VALUES($1,$2,'Chat Model','test','http://127.0.0.1',1024)`, []any{modelID, "chat-" + modelID.String()}},
+		{`INSERT INTO workspace_subscriptions(workspace_id,default_model_id,monthly_token_limit) VALUES($1,$2,1000)`, []any{workspaceID, modelID}},
+	} {
+		if _, err = tx.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	threadID, operationID := uuid.New(), uuid.New()
+	if _, err = tx.Exec(ctx, `INSERT INTO chat_threads(id,workspace_id,server_id,created_by,title) VALUES($1,$2,$3,$4,'Diagnostics')`, threadID, workspaceID, serverID, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy,risk,title,summary) SELECT $1,$2,$3,$4,updated_at,$5,$6,'pending_approval','approval_required','low','Health','Check health' FROM servers WHERE id=$4`, operationID, threadID, workspaceID, serverID, userID, modelID); err != nil {
+		t.Fatal(err)
+	}
+	var visible int
+	if err = tx.QueryRow(ctx, `SELECT count(*) FROM chat_threads WHERE id=$1 AND workspace_id=$2`, threadID, otherWorkspaceID).Scan(&visible); err != nil || visible != 0 {
+		t.Fatalf("thread isolation count=%d err=%v", visible, err)
+	}
+	tag, err := tx.Exec(ctx, `UPDATE operations SET status='approved',approved_by=$3,approved_at=now() WHERE id=$1 AND workspace_id=$2 AND status='pending_approval'`, operationID, workspaceID, userID)
+	if err != nil || tag.RowsAffected() != 1 {
+		t.Fatalf("approve rows=%d err=%v", tag.RowsAffected(), err)
+	}
+	tag, err = tx.Exec(ctx, `UPDATE operations SET status='approved' WHERE id=$1 AND workspace_id=$2 AND status='pending_approval'`, operationID, workspaceID)
+	if err != nil || tag.RowsAffected() != 0 {
+		t.Fatalf("double approve rows=%d err=%v", tag.RowsAffected(), err)
+	}
+	tag, err = tx.Exec(ctx, `UPDATE operations SET status='cancelled' WHERE id=$1 AND workspace_id=$2 AND status IN ('pending_approval','approved','running')`, operationID, otherWorkspaceID)
+	if err != nil || tag.RowsAffected() != 0 {
+		t.Fatalf("cross-tenant cancel rows=%d err=%v", tag.RowsAffected(), err)
+	}
+}
+
+func TestIntegrationFailPlanningIgnoresCancelledRequestContext(t *testing.T) {
+	databaseURL := os.Getenv("TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	db, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := migrate(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	userID, workspaceID, serverID, modelID, threadID, operationID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	statements := []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO users(id,full_name,display_name,email,password_hash) VALUES($1,'Cancelled User','Cancelled User',$2,'test')`, []any{userID, userID.String() + "@cancelled.test"}},
+		{`INSERT INTO workspaces(id,name) VALUES($1,'Cancelled Workspace')`, []any{workspaceID}},
+		{`INSERT INTO servers(id,workspace_id,name,host,port,ssh_user,environment) VALUES($1,$2,'API','127.0.0.1',22,'deploy','development')`, []any{serverID, workspaceID}},
+		{`INSERT INTO ai_models(id,external_model_id,name,provider,base_url,context_window) VALUES($1,$2,'Chat Model','test','http://127.0.0.1',1024)`, []any{modelID, "cancelled-" + modelID.String()}},
+		{`INSERT INTO chat_threads(id,workspace_id,server_id,created_by,title) VALUES($1,$2,$3,$4,'Diagnostics')`, []any{threadID, workspaceID, serverID, userID}},
+		{`INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy) SELECT $1,$2,$3,$4,updated_at,$5,$6,'planning','approval_required' FROM servers WHERE id=$4`, []any{operationID, threadID, workspaceID, serverID, userID, modelID}},
+	}
+	for _, statement := range statements {
+		if _, err = tx.Exec(ctx, statement.sql, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{db: db}
+	cancelled, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+	if cancelled.Err() == nil {
+		t.Fatal("test request context was not cancelled")
+	}
+	s.failPlanning(operationID, "provider request cancelled")
+	active, err := s.hasActiveOperation(context.Background(), threadID, workspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Fatal("cancelled planning operation retained active lock")
+	}
+}

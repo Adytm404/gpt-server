@@ -123,6 +123,16 @@ describe('server pages', () => {
         disk_percent: 67,
         captured_at: '2026-08-21T10:00:00Z',
         services: [{ name: 'nginx', status: 'running', detail: 'active' }],
+        details: {
+          hostname: 'api-prod-01',
+          architecture: 'x86_64',
+          kernel: '6.8.0-40-generic',
+          cpu_model: 'AMD EPYC 7B13',
+          cpu_cores: 4,
+          memory_total_bytes: 8 * 1024 ** 3,
+          disk_total_bytes: 1.5 * 1024 ** 4,
+          virtualization: 'kvm',
+        },
       },
     }
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
@@ -133,6 +143,7 @@ describe('server pages', () => {
     })
     render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
     expect(await screen.findByText(/No metrics collected yet/)).toBeInTheDocument()
+    expect(screen.getByText('Run health check to collect hardware specifications.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Run health check/i }))
     await waitFor(() => expect(screen.getByText('Health check completed')).toBeInTheDocument())
     expect(fetchMock.mock.calls.map(([url]) => String(url).split('/').pop())).toEqual(['srv-1', 'health-check', 'srv-1'])
@@ -143,6 +154,16 @@ describe('server pages', () => {
     expect(screen.getByText('67%')).toBeInTheDocument()
     expect(screen.getByText('nginx')).toBeInTheDocument()
     expect(screen.getByText('active')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Server specifications' })).toBeInTheDocument()
+    expect(screen.getByText('AMD EPYC 7B13')).toBeInTheDocument()
+    expect(screen.getByText('4 logical cores')).toBeInTheDocument()
+    expect(screen.getByText('8 GB')).toBeInTheDocument()
+    expect(screen.getByText('1.5 TB')).toBeInTheDocument()
+    expect(screen.getByText('x86_64')).toBeInTheDocument()
+    expect(screen.getByText('6.8.0-40-generic')).toBeInTheDocument()
+    expect(screen.getByText('api-prod-01')).toBeInTheDocument()
+    expect(screen.getByText('kvm')).toBeInTheDocument()
+    expect(screen.queryByText('Run health check to collect hardware specifications.')).not.toBeInTheDocument()
   })
 
   it('shows backend list failure and retry', async () => {

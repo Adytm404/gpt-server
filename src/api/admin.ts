@@ -64,6 +64,9 @@ export type HistoryEvent = {
   created_at: string
 }
 
+export type AdminWorkspace = { id: string; name: string; createdAt?: string }
+export type WorkspaceAIConfig = { workspaceId: string; defaultModelId: string; monthlyTokenLimit: number; modelStatus?: string; updatedAt?: string }
+
 export type Model = {
   id: string; modelId?: string; name: string; provider: string; context: string
   baseUrl: string
@@ -109,6 +112,17 @@ const json = (value: unknown) => JSON.stringify(value)
 
 export const adminApi = {
   async listModels() { return unwrapList<ModelDTO>(await apiRequest('/api/v1/admin/models'), 'models').map(modelFromDTO) },
+  async listWorkspaces(): Promise<AdminWorkspace[]> {
+    return unwrapList<{ id: string; name: string; created_at?: string }>(await apiRequest('/api/v1/admin/workspaces'), 'workspaces').map(workspace => ({ id: workspace.id, name: workspace.name, createdAt: workspace.created_at }))
+  },
+  async getWorkspaceAIConfig(id: string): Promise<WorkspaceAIConfig> {
+    const dto = unwrapOne<{ workspace_id: string; default_model_id?: string; monthly_token_limit: number; model_status?: string; updated_at?: string }>(await apiRequest(`/api/v1/admin/workspaces/${encodeURIComponent(id)}/ai-config`), 'config')
+    return { workspaceId: dto.workspace_id || id, defaultModelId: dto.default_model_id || '', monthlyTokenLimit: dto.monthly_token_limit || 0, modelStatus: dto.model_status, updatedAt: dto.updated_at }
+  },
+  async setWorkspaceAIConfig(id: string, input: { defaultModelId: string; monthlyTokenLimit: number }): Promise<WorkspaceAIConfig> {
+    const dto = unwrapOne<{ workspace_id: string; default_model_id: string; monthly_token_limit: number; model_status?: string; updated_at?: string }>(await apiRequest(`/api/v1/admin/workspaces/${encodeURIComponent(id)}/ai-config`, { method: 'POST', body: JSON.stringify({ default_model_id: input.defaultModelId, monthly_token_limit: input.monthlyTokenLimit }) }), 'config')
+    return { workspaceId: dto.workspace_id || id, defaultModelId: dto.default_model_id, monthlyTokenLimit: dto.monthly_token_limit, modelStatus: dto.model_status, updatedAt: dto.updated_at }
+  },
   async saveModel(model: Model, create: boolean) {
     const dto = unwrapOne<ModelDTO>(await apiRequest(create ? '/api/v1/admin/models' : `/api/v1/admin/models/${encodeURIComponent(model.id)}`, { method: create ? 'POST' : 'PATCH', body: json(modelToInput(model)) }), 'model')
     const saved = modelFromDTO(dto)

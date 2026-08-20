@@ -1,0 +1,638 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+type chatThreadResponse struct {
+	ID         uuid.UUID `json:"id"`
+	ServerID   uuid.UUID `json:"server_id"`
+	ServerName string    `json:"server_name"`
+	CreatedBy  uuid.UUID `json:"created_by"`
+	Title      string    `json:"title"`
+	Status     string    `json:"status"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type chatMessageResponse struct {
+	ID           uuid.UUID  `json:"id"`
+	ThreadID     uuid.UUID  `json:"thread_id"`
+	Role         string     `json:"role"`
+	Content      string     `json:"content"`
+	ModelID      *uuid.UUID `json:"model_id,omitempty"`
+	InputTokens  int64      `json:"input_tokens"`
+	OutputTokens int64      `json:"output_tokens"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+
+type operationResponse struct {
+	ID, ThreadID, ServerID, CreatedBy, ModelID    uuid.UUID
+	Status, Policy, Risk, Title, Summary, Error   string
+	ApprovedBy, RejectedBy                        *uuid.UUID
+	ApprovedAt, RejectedAt, StartedAt, FinishedAt *time.Time
+	CreatedAt, UpdatedAt                          time.Time
+	Steps                                         []operationStepResponse
+}
+
+func (o operationResponse) MarshalJSON() ([]byte, error) {
+	type dto struct {
+		ID         uuid.UUID               `json:"id"`
+		ThreadID   uuid.UUID               `json:"thread_id"`
+		ServerID   uuid.UUID               `json:"server_id"`
+		CreatedBy  uuid.UUID               `json:"created_by"`
+		ModelID    uuid.UUID               `json:"model_id"`
+		Status     string                  `json:"status"`
+		Policy     string                  `json:"policy"`
+		Risk       string                  `json:"risk"`
+		Title      string                  `json:"title"`
+		Summary    string                  `json:"summary"`
+		Error      string                  `json:"error,omitempty"`
+		ApprovedBy *uuid.UUID              `json:"approved_by,omitempty"`
+		RejectedBy *uuid.UUID              `json:"rejected_by,omitempty"`
+		ApprovedAt *time.Time              `json:"approved_at,omitempty"`
+		RejectedAt *time.Time              `json:"rejected_at,omitempty"`
+		StartedAt  *time.Time              `json:"started_at,omitempty"`
+		FinishedAt *time.Time              `json:"finished_at,omitempty"`
+		CreatedAt  time.Time               `json:"created_at"`
+		UpdatedAt  time.Time               `json:"updated_at"`
+		Steps      []operationStepResponse `json:"steps"`
+	}
+	return json.Marshal(dto{o.ID, o.ThreadID, o.ServerID, o.CreatedBy, o.ModelID, o.Status, o.Policy, o.Risk, o.Title, o.Summary, o.Error, o.ApprovedBy, o.RejectedBy, o.ApprovedAt, o.RejectedAt, o.StartedAt, o.FinishedAt, o.CreatedAt, o.UpdatedAt, o.Steps})
+}
+
+type operationStepResponse struct {
+	ID          uuid.UUID  `json:"id"`
+	Position    int        `json:"position"`
+	Description string     `json:"description"`
+	Executable  string     `json:"executable"`
+	Args        []string   `json:"args"`
+	Status      string     `json:"status"`
+	ExitCode    *int       `json:"exit_code,omitempty"`
+	Stdout      string     `json:"stdout"`
+	Stderr      string     `json:"stderr"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
+}
+
+type workspaceAIConfig struct {
+	WorkspaceID       uuid.UUID  `json:"workspace_id"`
+	PlanRevisionID    *uuid.UUID `json:"plan_revision_id,omitempty"`
+	DefaultModelID    *uuid.UUID `json:"default_model_id,omitempty"`
+	MonthlyTokenLimit int64      `json:"monthly_token_limit"`
+	ModelStatus       *string    `json:"model_status,omitempty"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+func (s *server) chatRoutes(r chi.Router) {
+	r.Get("/config", s.getChatConfig)
+	r.Get("/threads", s.listChatThreads)
+	r.With(s.requireMutation).Post("/threads", s.requireWorkspaceAction("operate", s.createChatThread))
+	r.Get("/threads/{id}", s.getChatThread)
+	r.With(s.requireMutation).Patch("/threads/{id}", s.requireWorkspaceAction("operate", s.updateChatThread))
+	r.With(s.requireMutation).Delete("/threads/{id}", s.requireWorkspaceAction("operate", s.deleteChatThread))
+	r.Get("/threads/{id}/messages", s.listChatMessages)
+	r.With(s.requireMutation).Post("/threads/{id}/messages", s.requireWorkspaceAction("operate", s.createChatMessage))
+}
+
+func scanThread(row pgx.Row) (chatThreadResponse, error) {
+	var x chatThreadResponse
+	err := row.Scan(&x.ID, &x.ServerID, &x.ServerName, &x.CreatedBy, &x.Title, &x.Status, &x.CreatedAt, &x.UpdatedAt)
+	return x, err
+}
+
+func (s *server) listChatThreads(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `SELECT t.id,t.server_id,s.name,t.created_by,t.title,t.status,t.created_at,t.updated_at FROM chat_threads t JOIN servers s ON s.id=t.server_id WHERE t.workspace_id=$1 ORDER BY t.updated_at DESC`, authFrom(r.Context()).WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer rows.Close()
+	out := []chatThreadResponse{}
+	for rows.Next() {
+		x, e := scanThread(rows)
+		if e != nil {
+			s.dbError(w, r, e)
+			return
+		}
+		out = append(out, x)
+	}
+	if err := rows.Err(); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, map[string]any{"threads": out})
+}
+
+func (s *server) createChatThread(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ServerID uuid.UUID `json:"server_id"`
+		Title    string    `json:"title"`
+	}
+	if decodeJSON(r, &in) != nil || in.ServerID == uuid.Nil || len(in.Title) > 200 {
+		s.writeError(w, r, 400, "invalid thread fields")
+		return
+	}
+	a := authFrom(r.Context())
+	id := uuid.New()
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	x, err := scanThread(tx.QueryRow(r.Context(), `WITH inserted AS (INSERT INTO chat_threads(id,workspace_id,server_id,created_by,title) SELECT $1,$2,id,$3,$4 FROM servers WHERE id=$5 AND workspace_id=$2 AND deleted_at IS NULL RETURNING *) SELECT t.id,t.server_id,s.name,t.created_by,t.title,t.status,t.created_at,t.updated_at FROM inserted t JOIN servers s ON s.id=t.server_id`, id, a.WorkspaceID, a.UserID, strings.TrimSpace(in.Title), in.ServerID))
+	if err == nil {
+		err = insertAudit(r.Context(), tx, a.UserID, "chat", "Chat thread created", id, x.Title, map[string]any{"server_id": in.ServerID})
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 201, x)
+}
+
+func (s *server) getChatThread(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	x, err := scanThread(s.db.QueryRow(r.Context(), `SELECT t.id,t.server_id,s.name,t.created_by,t.title,t.status,t.created_at,t.updated_at FROM chat_threads t JOIN servers s ON s.id=t.server_id WHERE t.id=$1 AND t.workspace_id=$2`, id, authFrom(r.Context()).WorkspaceID))
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, x)
+}
+
+func (s *server) updateChatThread(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	var in chatThreadPatch
+	if decodeJSON(r, &in) != nil || validateChatThreadPatch(in) != nil {
+		s.writeError(w, r, 400, "invalid thread fields")
+		return
+	}
+	a := authFrom(r.Context())
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var title any
+	if in.Title != nil {
+		title = strings.TrimSpace(*in.Title)
+	}
+	status := patchThreadStatus(in)
+	x, err := scanThread(tx.QueryRow(r.Context(), `WITH changed AS (UPDATE chat_threads SET title=COALESCE($3,title),status=COALESCE($4,status),updated_at=now() WHERE id=$1 AND workspace_id=$2 RETURNING *) SELECT t.id,t.server_id,s.name,t.created_by,t.title,t.status,t.created_at,t.updated_at FROM changed t JOIN servers s ON s.id=t.server_id`, id, a.WorkspaceID, title, status))
+	if err == nil {
+		err = insertAudit(r.Context(), tx, a.UserID, "chat", "Chat thread updated", id, x.Title, map[string]any{"status": x.Status})
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, x)
+}
+
+type chatThreadPatch struct {
+	Title    *string `json:"title"`
+	Status   *string `json:"status"`
+	Archived *bool   `json:"archived"`
+}
+
+func validateChatThreadPatch(in chatThreadPatch) error {
+	if in.Title == nil && in.Status == nil && in.Archived == nil {
+		return errors.New("empty patch")
+	}
+	if in.Title != nil && len(*in.Title) > 200 {
+		return errors.New("title too long")
+	}
+	if in.Status != nil && *in.Status != "active" && *in.Status != "archived" {
+		return errors.New("invalid status")
+	}
+	if in.Status != nil && in.Archived != nil && (*in.Status == "archived") != *in.Archived {
+		return errors.New("conflicting status")
+	}
+	return nil
+}
+
+func patchThreadStatus(in chatThreadPatch) any {
+	if in.Status != nil {
+		return *in.Status
+	}
+	if in.Archived != nil && *in.Archived {
+		return "archived"
+	}
+	if in.Archived != nil {
+		return "active"
+	}
+	return nil
+}
+
+func (s *server) deleteChatThread(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	tag, err := s.db.Exec(r.Context(), `DELETE FROM chat_threads t WHERE t.id=$1 AND t.workspace_id=$2 AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.thread_id=t.id AND o.status IN ('planning','pending_approval','approved','running'))`, id, authFrom(r.Context()).WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		var exists bool
+		_ = s.db.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM chat_threads WHERE id=$1 AND workspace_id=$2)`, id, authFrom(r.Context()).WorkspaceID).Scan(&exists)
+		if exists {
+			s.writeError(w, r, http.StatusConflict, "thread has an active operation")
+			return
+		}
+		s.writeError(w, r, http.StatusNotFound, "not found")
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *server) listChatMessages(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT m.id,m.thread_id,m.role,m.content,m.model_id,m.input_tokens,m.output_tokens,m.created_at FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id WHERE m.thread_id=$1 AND t.workspace_id=$2 ORDER BY m.created_at,m.id`, id, authFrom(r.Context()).WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer rows.Close()
+	out := []chatMessageResponse{}
+	for rows.Next() {
+		var x chatMessageResponse
+		if err := rows.Scan(&x.ID, &x.ThreadID, &x.Role, &x.Content, &x.ModelID, &x.InputTokens, &x.OutputTokens, &x.CreatedAt); err != nil {
+			s.dbError(w, r, err)
+			return
+		}
+		out = append(out, x)
+	}
+	if err := rows.Err(); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, map[string]any{"messages": out})
+}
+
+type resolvedPlanner struct {
+	ID   uuid.UUID
+	Name string
+	plannerModel
+	MonthlyLimit, Used int64
+}
+
+type plannerQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func (s *server) resolvePlanner(ctx context.Context, workspaceID uuid.UUID) (resolvedPlanner, error) {
+	return s.resolvePlannerWith(ctx, s.db, workspaceID)
+}
+
+func (s *server) resolvePlannerWith(ctx context.Context, db plannerQuerier, workspaceID uuid.UUID) (resolvedPlanner, error) {
+	var x resolvedPlanner
+	var ciphertext []byte
+	err := db.QueryRow(ctx, `SELECT m.id,m.name,m.base_url,m.external_model_id,m.api_key_ciphertext,ws.monthly_token_limit,COALESCE((SELECT sum(total_tokens) FROM token_usage WHERE workspace_id=ws.workspace_id AND period_start=date_trunc('month',now())::date),0) FROM workspace_subscriptions ws JOIN ai_models m ON m.id=COALESCE(ws.default_model_id,(SELECT default_model_id FROM subscription_plan_revisions WHERE id=ws.plan_revision_id AND status='published')) WHERE ws.workspace_id=$1 AND m.status='active'`, workspaceID).Scan(&x.ID, &x.Name, &x.BaseURL, &x.ExternalID, &ciphertext, &x.MonthlyLimit, &x.Used)
+	if err != nil {
+		return x, err
+	}
+	if x.MonthlyLimit <= 0 {
+		return x, errNoEntitlement
+	}
+	if x.Used >= x.MonthlyLimit {
+		return x, errQuotaExceeded
+	}
+	if len(ciphertext) > 0 {
+		x.APIKey, err = decryptModelAPIKey(s.cfg.modelKeyEncryptionKey, ciphertext)
+	}
+	return x, err
+}
+
+var errNoEntitlement = errors.New("workspace AI is not configured")
+var errQuotaExceeded = errors.New("monthly token quota exceeded")
+
+type chatConfigResponse struct {
+	Configured        bool       `json:"configured"`
+	ModelID           *uuid.UUID `json:"model_id,omitempty"`
+	ModelName         string     `json:"model_name,omitempty"`
+	MonthlyTokenLimit int64      `json:"monthly_token_limit"`
+	UsedTokens        int64      `json:"used_tokens"`
+}
+
+func (s *server) getChatConfig(w http.ResponseWriter, r *http.Request) {
+	model, err := s.resolvePlanner(r.Context(), authFrom(r.Context()).WorkspaceID)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, errNoEntitlement) {
+		s.writeJSON(w, http.StatusOK, chatConfigResponse{})
+		return
+	}
+	if err != nil && !errors.Is(err, errQuotaExceeded) {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, chatConfigResponse{Configured: true, ModelID: &model.ID, ModelName: model.Name, MonthlyTokenLimit: model.MonthlyLimit, UsedTokens: model.Used})
+}
+
+func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Content string `json:"content"`
+		Policy  string `json:"policy"`
+	}
+	if decodeJSON(r, &in) != nil || validateChatPrompt(in.Content) != nil || in.Policy != "approval_required" {
+		s.writeError(w, r, 422, "request is outside permitted server management scope")
+		return
+	}
+	a := authFrom(r.Context())
+	if !s.planningLimiter.allow(planningRateKey(a.UserID, a.WorkspaceID), time.Now()) {
+		s.writeError(w, r, 429, "too many planning requests")
+		return
+	}
+	threadID, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	var serverID uuid.UUID
+	var serverUpdatedAt time.Time
+	var serverContext map[string]any
+	err := s.db.QueryRow(r.Context(), `SELECT t.server_id,s.updated_at,jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'uptime_seconds',s.uptime_seconds,'status',s.status,'last_checked_at',s.last_checked_at,'health',COALESCE((SELECT jsonb_build_object('status',h.status,'cpu_percent',h.cpu_percent,'memory_percent',h.memory_percent,'disk_percent',h.disk_percent,'services',h.services,'details',h.details,'checked_at',h.checked_at) FROM server_health_snapshots h WHERE h.server_id=s.id ORDER BY h.checked_at DESC LIMIT 1),'{}'::jsonb)) FROM chat_threads t JOIN servers s ON s.id=t.server_id WHERE t.id=$1 AND t.workspace_id=$2 AND t.status='active' AND s.deleted_at IS NULL`, threadID, a.WorkspaceID).Scan(&serverID, &serverUpdatedAt, &serverContext)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	active, err := s.hasActiveOperation(r.Context(), threadID, a.WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	if active {
+		s.writeError(w, r, http.StatusConflict, "thread already has an active operation")
+		return
+	}
+	localUnlock := s.lockPlanningWorkspace(a.WorkspaceID)
+	defer localUnlock()
+	conn, err := s.db.Acquire(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	if _, err = conn.Exec(r.Context(), `SELECT pg_advisory_lock(hashtextextended($1, 0))`, "chat-planning:"+a.WorkspaceID.String()); err != nil {
+		conn.Release()
+		s.dbError(w, r, err)
+		return
+	}
+	connActive := true
+	cleanupConn := func() {
+		if !connActive {
+			return
+		}
+		connActive = false
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, unlockErr := conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, "chat-planning:"+a.WorkspaceID.String()); unlockErr != nil {
+			_ = conn.Conn().Close(context.Background())
+		}
+		conn.Release()
+	}
+	defer cleanupConn()
+	model, err := s.resolvePlannerWith(r.Context(), conn, a.WorkspaceID)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, errNoEntitlement) {
+		s.writeError(w, r, 409, "workspace AI is not configured")
+		return
+	}
+	if errors.Is(err, errQuotaExceeded) {
+		s.writeError(w, r, 429, err.Error())
+		return
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	opID, msgID := uuid.New(), uuid.New()
+	tx, err := conn.Begin(r.Context())
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3)`, msgID, threadID, in.Content)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy) VALUES($1,$2,$3,$4,$5,$6,$7,'planning',$8)`, opID, threadID, a.WorkspaceID, serverID, serverUpdatedAt, a.UserID, model.ID, in.Policy)
+	}
+	if err == nil {
+		err = insertOperationEvent(r.Context(), tx, opID, "planning", uuid.Nil, map[string]any{"message_id": msgID})
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	} else if tx != nil {
+		_ = tx.Rollback(r.Context())
+	}
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "operations_one_active_per_thread_idx" {
+			s.writeError(w, r, http.StatusConflict, "thread already has an active operation")
+			return
+		}
+		s.dbError(w, r, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.modelRequestTimeout)
+	s.cancelMu.Lock()
+	if s.operationCancels == nil {
+		s.operationCancels = make(map[uuid.UUID]context.CancelFunc)
+	}
+	s.operationCancels[opID] = cancel
+	s.cancelMu.Unlock()
+	plan, usage, planErr := requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, in.Content, serverContext)
+	cancel()
+	s.cancelMu.Lock()
+	delete(s.operationCancels, opID)
+	s.cancelMu.Unlock()
+	if planErr != nil {
+		cleanupConn()
+		s.failPlanning(opID, planErr.Error())
+		s.writeError(w, r, 502, "model could not produce a safe operation plan")
+		return
+	}
+	tx, err = conn.Begin(r.Context())
+	assistantID := uuid.New()
+	plan.Title = redactOperationalOutput(plan.Title)
+	plan.Summary = redactOperationalOutput(plan.Summary)
+	for i := range plan.Steps {
+		plan.Steps[i].Description = redactOperationalOutput(plan.Steps[i].Description)
+	}
+	assistantContent := plan.Summary
+	if err == nil {
+		var tag pgconn.CommandTag
+		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status='pending_approval',title=$2,summary=$3,risk=$4,updated_at=now() WHERE id=$1 AND workspace_id=$5 AND status='planning'`, opID, plan.Title, plan.Summary, plan.Risk, a.WorkspaceID)
+		if err == nil && tag.RowsAffected() != 1 {
+			err = errors.New("planning operation is no longer active")
+		}
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, assistantID, threadID, assistantContent, model.ID, usage.InputTokens, usage.OutputTokens)
+	}
+	for i, step := range plan.Steps {
+		if err != nil {
+			break
+		}
+		args, _ := json.Marshal(step.Args)
+		_, err = tx.Exec(r.Context(), `INSERT INTO operation_steps(id,operation_id,position,description,executable,args) VALUES($1,$2,$3,$4,$5,$6)`, uuid.New(), opID, i+1, step.Description, step.Executable, args)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, opID, model.ID, usage.InputTokens, usage.OutputTokens)
+	}
+	if err == nil {
+		err = insertOperationEvent(r.Context(), tx, opID, "plan_ready", uuid.Nil, map[string]any{"steps": len(plan.Steps), "input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens})
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET updated_at=now() WHERE id=$1`, threadID)
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	} else if tx != nil {
+		_ = tx.Rollback(r.Context())
+	}
+	if err != nil {
+		cleanupConn()
+		s.failPlanning(opID, "operation plan could not be stored")
+		s.dbError(w, r, err)
+		return
+	}
+	cleanupConn()
+	op, err := s.loadOperation(r.Context(), opID, a.WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 201, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: assistantContent, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": op})
+}
+
+func (s *server) failPlanning(id uuid.UUID, message string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tag, _ := s.db.Exec(ctx, `UPDATE operations SET status='failed',error=$2,finished_at=now(),updated_at=now() WHERE id=$1 AND status='planning'`, id, message)
+	if tag.RowsAffected() > 0 {
+		_ = insertOperationEvent(ctx, s.db, id, "failed", uuid.Nil, map[string]any{"error": "planning failed"})
+	}
+}
+
+func (s *server) hasActiveOperation(ctx context.Context, threadID, workspaceID uuid.UUID) (bool, error) {
+	var active bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM operations WHERE thread_id=$1 AND workspace_id=$2 AND status IN ('planning','pending_approval','approved','running'))`, threadID, workspaceID).Scan(&active)
+	return active, err
+}
+
+func (s *server) lockPlanningWorkspace(workspaceID uuid.UUID) func() {
+	s.planningMu.Lock()
+	if s.planningLocks == nil {
+		s.planningLocks = make(map[uuid.UUID]*sync.Mutex)
+	}
+	lock := s.planningLocks[workspaceID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.planningLocks[workspaceID] = lock
+	}
+	s.planningMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (s *server) listAdminWorkspaces(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(r.Context(), `SELECT id,name,created_at FROM workspaces ORDER BY created_at`)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		var created time.Time
+		if err := rows.Scan(&id, &name, &created); err != nil {
+			s.dbError(w, r, err)
+			return
+		}
+		out = append(out, map[string]any{"id": id, "name": name, "created_at": created})
+	}
+	if err := rows.Err(); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, map[string]any{"workspaces": out})
+}
+func workspaceIDParam(r *http.Request) (uuid.UUID, error) {
+	return uuid.Parse(chi.URLParam(r, "workspaceID"))
+}
+func (s *server) getWorkspaceAIConfig(w http.ResponseWriter, r *http.Request) {
+	id, err := workspaceIDParam(r)
+	if err != nil {
+		s.writeError(w, r, 400, "invalid workspace id")
+		return
+	}
+	var x workspaceAIConfig
+	err = s.db.QueryRow(r.Context(), `SELECT ws.workspace_id,ws.plan_revision_id,ws.default_model_id,ws.monthly_token_limit,m.status,ws.updated_at FROM workspace_subscriptions ws LEFT JOIN ai_models m ON m.id=ws.default_model_id WHERE ws.workspace_id=$1`, id).Scan(&x.WorkspaceID, &x.PlanRevisionID, &x.DefaultModelID, &x.MonthlyTokenLimit, &x.ModelStatus, &x.UpdatedAt)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, x)
+}
+func (s *server) setWorkspaceAIConfig(w http.ResponseWriter, r *http.Request) {
+	id, err := workspaceIDParam(r)
+	if err != nil {
+		s.writeError(w, r, 400, "invalid workspace id")
+		return
+	}
+	var in struct {
+		DefaultModelID    *uuid.UUID `json:"default_model_id"`
+		MonthlyTokenLimit int64      `json:"monthly_token_limit"`
+	}
+	if decodeJSON(r, &in) != nil || in.DefaultModelID == nil || *in.DefaultModelID == uuid.Nil || in.MonthlyTokenLimit < 0 {
+		s.writeError(w, r, 400, "invalid AI config")
+		return
+	}
+	var x workspaceAIConfig
+	err = s.db.QueryRow(r.Context(), `INSERT INTO workspace_subscriptions(workspace_id,default_model_id,monthly_token_limit) SELECT $1,m.id,$3 FROM ai_models m WHERE m.id=$2 AND m.status='active' ON CONFLICT(workspace_id) DO UPDATE SET default_model_id=EXCLUDED.default_model_id,monthly_token_limit=EXCLUDED.monthly_token_limit,updated_at=now() RETURNING workspace_id,plan_revision_id,default_model_id,monthly_token_limit,(SELECT status FROM ai_models WHERE id=default_model_id),updated_at`, id, *in.DefaultModelID, in.MonthlyTokenLimit).Scan(&x.WorkspaceID, &x.PlanRevisionID, &x.DefaultModelID, &x.MonthlyTokenLimit, &x.ModelStatus, &x.UpdatedAt)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, x)
+}
+
+type operationEventExecer interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func insertOperationEvent(ctx context.Context, db operationEventExecer, opID uuid.UUID, event string, stepID uuid.UUID, payload any) error {
+	raw, _ := json.Marshal(payload)
+	var step any
+	if stepID != uuid.Nil {
+		step = stepID
+	}
+	_, err := db.Exec(ctx, `INSERT INTO operation_events(operation_id,event_type,step_id,payload) VALUES($1,$2,$3,$4)`, opID, event, step, string(raw))
+	return err
+}

@@ -1,4 +1,4 @@
-import { serverFromDTO, serversApi, type CreateServerDTO } from './servers'
+import { formatBytes, serverFromDTO, serversApi, type CreateServerDTO } from './servers'
 
 const base = { id: 'server-1', name: 'Server', host: 'host.test', port: 22, ssh_user: 'root', auth_method: 'ssh_key' as const, environment: 'production' as const, status: 'online' as const, region: '', host_fingerprint: '' }
 
@@ -28,6 +28,46 @@ it('maps services from latest snapshot with top-level fallback', () => {
   expect(serverFromDTO({ ...base, latest_snapshot: { cpu_percent: 1, memory_percent: 2, disk_percent: 3, services: snapshotServices }, services: topLevelServices }).services)
     .toEqual([{ ...snapshotServices[0], detail: '' }])
   expect(serverFromDTO({ ...base, services: topLevelServices }).services).toEqual(topLevelServices)
+})
+
+it('maps latest snapshot hardware details into server specifications', () => {
+  const server = serverFromDTO({
+    ...base,
+    latest_snapshot: {
+      cpu_percent: 10,
+      memory_percent: 20,
+      disk_percent: 30,
+      details: {
+        hostname: 'api-01',
+        architecture: 'x86_64',
+        kernel: '6.8.0-40-generic',
+        cpu_model: 'AMD EPYC 7B13',
+        cpu_cores: 4,
+        memory_total_bytes: 8 * 1024 ** 3,
+        disk_total_bytes: 512 * 1024 ** 3,
+        virtualization: 'kvm',
+      },
+    },
+  })
+
+  expect(server.specification).toEqual({
+    hostname: 'api-01',
+    architecture: 'x86_64',
+    kernel: '6.8.0-40-generic',
+    cpuModel: 'AMD EPYC 7B13',
+    cpuCores: 4,
+    memoryTotalBytes: 8 * 1024 ** 3,
+    diskTotalBytes: 512 * 1024 ** 3,
+    virtualization: 'kvm',
+  })
+})
+
+it.each([
+  [8 * 1024 ** 3, '8 GB'],
+  [1.5 * 1024 ** 4, '1.5 TB'],
+  [1536 * 1024 ** 3, '1.5 TB'],
+])('formats %i bytes using binary GB/TB units', (bytes, expected) => {
+  expect(formatBytes(bytes)).toBe(expected)
 })
 
 it.each([

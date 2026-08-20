@@ -92,6 +92,9 @@ func validateServerCreateInput(in serverInput) error {
 	if err := validateServerInput(in); err != nil {
 		return err
 	}
+	if in.HostFingerprint == "" {
+		return errors.New("SSH host fingerprint required")
+	}
 	switch normalizedAuthMethod(in.AuthMethod) {
 	case authMethodSSHKey:
 		if strings.TrimSpace(in.PrivateKey) == "" || in.Password != "" {
@@ -168,6 +171,23 @@ func validateModelInput(in modelInput) error {
 		return errors.New("invalid model base URL")
 	}
 	return nil
+}
+
+func normalizedURLOrigin(value string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil {
+		return "", errors.New("invalid URL origin")
+	}
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), nil
+}
+
+func providerOriginAllowed(baseURL string, allowed map[string]struct{}) bool {
+	origin, err := normalizedURLOrigin(baseURL)
+	if err != nil {
+		return false
+	}
+	_, ok := allowed[origin]
+	return ok
 }
 
 func validatePlanInput(in planRevisionInput) error {

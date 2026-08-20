@@ -25,6 +25,7 @@ import {
   Eye,
   EyeOff,
   Gauge,
+  Building2,
   Layers3,
   Plus,
   Save,
@@ -39,6 +40,8 @@ import {
   type HistoryEvent,
   type Model,
   type Plan,
+  type AdminWorkspace,
+  type WorkspaceAIConfig,
 } from "../api/admin";
 import "./admin.css";
 
@@ -81,6 +84,7 @@ export default function AdminConsole() {
       <Routes>
         <Route index element={<Navigate to="models" replace />} />
         <Route path="models" element={<ModelsPage />} />
+        <Route path="workspaces" element={<WorkspacesPage />} />
         <Route path="plans" element={<PlansPage />} />
         <Route path="plans/new" element={<PlanEditor />} />
         <Route path="plans/:planID" element={<PlanEditor />} />
@@ -90,6 +94,55 @@ export default function AdminConsole() {
       </Routes>
     </div>
   );
+}
+
+type WorkspaceRowState = WorkspaceAIConfig & { loading: boolean; saving: boolean; error: string; saved: boolean }
+
+function WorkspacesPage() {
+  const [workspaces, setWorkspaces] = useState<AdminWorkspace[]>([])
+  const [models, setModels] = useState<Model[]>([])
+  const [configs, setConfigs] = useState<Record<string, WorkspaceRowState>>({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
+  const load = useCallback(async () => {
+    setLoading(true); setError("")
+    try {
+      const [nextWorkspaces, nextModels] = await Promise.all([adminApi.listWorkspaces(), adminApi.listModels()])
+      setWorkspaces(nextWorkspaces); setModels(nextModels.filter(model => model.status === "Active"))
+      const entries = await Promise.all(nextWorkspaces.map(async workspace => {
+        try {
+          const config = await adminApi.getWorkspaceAIConfig(workspace.id)
+          return [workspace.id, { ...config, loading: false, saving: false, error: "", saved: false }] as const
+        } catch (caught) {
+          const status = (caught as { status?: number }).status
+          if (status === 404) return [workspace.id, { workspaceId: workspace.id, defaultModelId: "", monthlyTokenLimit: 0, loading: false, saving: false, error: "", saved: false }] as const
+          return [workspace.id, { workspaceId: workspace.id, defaultModelId: "", monthlyTokenLimit: 0, loading: false, saving: false, error: message(caught), saved: false }] as const
+        }
+      }))
+      setConfigs(Object.fromEntries(entries))
+    } catch (caught) { setError(message(caught)) }
+    finally { setLoading(false) }
+  }, [])
+  useEffect(() => { void load() }, [load])
+  const change = (id: string, fields: Partial<WorkspaceRowState>) => setConfigs(current => ({ ...current, [id]: { ...current[id], ...fields, saved: false } }))
+  const save = async (workspace: AdminWorkspace) => {
+    const current = configs[workspace.id]
+    if (!current?.defaultModelId || current.monthlyTokenLimit < 0) return
+    change(workspace.id, { saving: true, error: "" })
+    try {
+      const saved = await adminApi.setWorkspaceAIConfig(workspace.id, current)
+      setConfigs(values => ({ ...values, [workspace.id]: { ...saved, loading: false, saving: false, error: "", saved: true } }))
+    } catch (caught) { change(workspace.id, { saving: false, error: message(caught) }) }
+  }
+  return <main className="admin-page"><PageHead eyebrow="Workspace routing" title="Workspace AI" copy="Assign active inference model and monthly token quota to each workspace." />
+    <Summary items={[{ label: "Workspaces", value: workspaces.length, detail: "Platform tenants", icon: Building2 }, { label: "Enabled", value: Object.values(configs).filter(config => config.defaultModelId && config.monthlyTokenLimit > 0).length, detail: "Chat enabled", icon: CheckCircle2 }, { label: "Active models", value: models.length, detail: "Available for assignment", icon: Bot }]} />
+    <section className="admin-panel"><AsyncState loading={loading} error={error} retry={() => void load()} empty={!workspaces.length ? "No workspaces found." : undefined} />
+      {!loading && !error && workspaces.length > 0 && <div className="workspace-config-list">{workspaces.map(workspace => {
+        const config = configs[workspace.id]
+        return <form key={workspace.id} className="workspace-config-row" onSubmit={event => { event.preventDefault(); void save(workspace) }}><div className="admin-identity"><i><Building2 size={16} /></i><span><b>{workspace.name}</b><small>{workspace.id}</small></span></div><label><span>Model</span><select aria-label={`Model for ${workspace.name}`} disabled={config?.saving} value={config?.defaultModelId || ""} onChange={event => change(workspace.id, { defaultModelId: event.target.value })}><option value="">Select active model</option>{models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><label><span>Monthly token limit</span><input aria-label={`Monthly token limit for ${workspace.name}`} disabled={config?.saving} type="number" min="0" value={config?.monthlyTokenLimit ?? 0} onChange={event => change(workspace.id, { monthlyTokenLimit: Number(event.target.value) })} /><small className="workspace-quota-note">0 disables chat for this workspace.</small></label><div className="workspace-config-action">{config?.error && <small role="alert">{config.error}</small>}{config?.saved && <small className="saved">{config.monthlyTokenLimit === 0 ? "Saved / chat disabled" : "Saved"}</small>}<button className="button dark" aria-label={`Save ${workspace.name} AI configuration`} disabled={!config?.defaultModelId || config.saving}>{config?.saving ? "Saving..." : "Save"}</button></div></form>
+      })}</div>}
+    </section>
+  </main>
 }
 
 function useLoad<T>(loader: () => Promise<T>, initial: T) {

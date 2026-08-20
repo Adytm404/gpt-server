@@ -1,12 +1,23 @@
 import { apiRequest, unwrapList, unwrapOne } from './client'
 
 export type ServerStatus = 'Online' | 'Offline' | 'Unknown'
+export type ServerSpecification = {
+  hostname?: string
+  architecture?: string
+  kernel?: string
+  cpuModel?: string
+  cpuCores?: number
+  memoryTotalBytes?: number
+  diskTotalBytes?: number
+  virtualization?: string
+}
 export type Server = {
   id: string; name: string; host: string; port: number; username: string
   authMethod: 'ssh_key' | 'password'
   environment: 'Production' | 'Staging' | 'Development'; status: ServerStatus
   region: string; operatingSystem: string; uptime: string; fingerprint: string
   latestSnapshot: null | { cpuPercent: number; memoryPercent: number; diskPercent: number; capturedAt: string }
+  specification: ServerSpecification
   services: Array<{ name: string; status: string; detail: string }>
 }
 
@@ -15,7 +26,7 @@ export type ServerDTO = {
   auth_method: 'ssh_key' | 'password'
   environment: 'production' | 'staging' | 'development'; status: 'online' | 'offline' | 'unknown'
   region: string; operating_system?: string; uptime?: string; uptime_seconds?: number; host_fingerprint: string
-  latest_snapshot?: { cpu_percent: number; memory_percent: number; disk_percent: number; captured_at?: string; checked_at?: string; services?: Array<{ name: string; status: string; detail?: string }> } | null
+  latest_snapshot?: { cpu_percent: number; memory_percent: number; disk_percent: number; captured_at?: string; checked_at?: string; services?: Array<{ name: string; status: string; detail?: string }>; details?: { hostname?: string; architecture?: string; kernel?: string; cpu_model?: string; cpu_cores?: number; memory_total_bytes?: number; disk_total_bytes?: number; virtualization?: string } } | null
   services?: Array<{ name: string; status: string; detail?: string }>
 }
 
@@ -33,10 +44,18 @@ export function formatUptime(seconds: number): string {
   return `${minutes}m`
 }
 
+export function formatBytes(bytes: number): string {
+  const terabyte = 1024 ** 4
+  const unit = bytes >= terabyte ? terabyte : 1024 ** 3
+  const value = Number((bytes / unit).toFixed(1))
+  return `${value} ${bytes >= terabyte ? 'TB' : 'GB'}`
+}
+
 export function serverFromDTO(dto: ServerDTO): Server {
   const title = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
   const services = dto.latest_snapshot?.services ?? dto.services ?? []
-  return { id: dto.id, name: dto.name, host: dto.host, port: dto.port, username: dto.ssh_user, authMethod: dto.auth_method || 'ssh_key', environment: title(dto.environment) as Server['environment'], status: title(dto.status) as ServerStatus, region: dto.region || '-', operatingSystem: dto.operating_system || '-', uptime: dto.uptime_seconds == null ? dto.uptime || '-' : formatUptime(dto.uptime_seconds), fingerprint: dto.host_fingerprint || '', latestSnapshot: dto.latest_snapshot ? { cpuPercent: dto.latest_snapshot.cpu_percent, memoryPercent: dto.latest_snapshot.memory_percent, diskPercent: dto.latest_snapshot.disk_percent, capturedAt: dto.latest_snapshot.captured_at || dto.latest_snapshot.checked_at || '' } : null, services: services.map(service => ({ ...service, detail: service.detail || '' })) }
+  const details = dto.latest_snapshot?.details
+  return { id: dto.id, name: dto.name, host: dto.host, port: dto.port, username: dto.ssh_user, authMethod: dto.auth_method || 'ssh_key', environment: title(dto.environment) as Server['environment'], status: title(dto.status) as ServerStatus, region: dto.region || '-', operatingSystem: dto.operating_system || '-', uptime: dto.uptime_seconds == null ? dto.uptime || '-' : formatUptime(dto.uptime_seconds), fingerprint: dto.host_fingerprint || '', latestSnapshot: dto.latest_snapshot ? { cpuPercent: dto.latest_snapshot.cpu_percent, memoryPercent: dto.latest_snapshot.memory_percent, diskPercent: dto.latest_snapshot.disk_percent, capturedAt: dto.latest_snapshot.captured_at || dto.latest_snapshot.checked_at || '' } : null, specification: details ? { hostname: details.hostname, architecture: details.architecture, kernel: details.kernel, cpuModel: details.cpu_model, cpuCores: details.cpu_cores, memoryTotalBytes: details.memory_total_bytes, diskTotalBytes: details.disk_total_bytes, virtualization: details.virtualization } : {}, services: services.map(service => ({ ...service, detail: service.detail || '' })) }
 }
 
 function serverInput(input: CreateServerDTO) {

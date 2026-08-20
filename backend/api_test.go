@@ -195,11 +195,11 @@ func TestServerSummaryUsesBackendStatuses(t *testing.T) {
 
 func TestLatestSnapshotResponseContract(t *testing.T) {
 	captured := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	encoded, err := json.Marshal(serverResponse{LatestSnapshot: &healthSnapshotResponse{Status: "online", LatencyMS: 12, CPUPercent: 0, MemoryPercent: 0, DiskPercent: 0, CapturedAt: captured}})
+	encoded, err := json.Marshal(serverResponse{LatestSnapshot: &healthSnapshotResponse{Status: "online", LatencyMS: 12, CPUPercent: 0, MemoryPercent: 0, DiskPercent: 0, Details: map[string]any{"hostname": "api-01", "cpu_cores": 8, "memory_total_bytes": int64(8192000000)}, CapturedAt: captured}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{`"latest_snapshot"`, `"disk_percent":0`, `"captured_at":"2026-08-20T12:00:00Z"`} {
+	for _, field := range []string{`"latest_snapshot"`, `"disk_percent":0`, `"details":{"cpu_cores":8,"hostname":"api-01","memory_total_bytes":8192000000}`, `"captured_at":"2026-08-20T12:00:00Z"`} {
 		if !strings.Contains(string(encoded), field) {
 			t.Fatalf("snapshot response missing %s: %s", field, encoded)
 		}
@@ -233,7 +233,7 @@ func TestRolePermissions(t *testing.T) {
 	for _, tc := range []struct {
 		role, action string
 		want         bool
-	}{{"owner", "delete", true}, {"operator", "update", true}, {"operator", "delete", false}, {"viewer", "read", true}, {"viewer", "test", false}, {"unknown", "read", false}} {
+	}{{"owner", "delete", true}, {"operator", "update", false}, {"operator", "operate", true}, {"operator", "delete", false}, {"viewer", "read", true}, {"viewer", "test", false}, {"unknown", "read", false}} {
 		if got := workspaceCan(tc.role, tc.action); got != tc.want {
 			t.Errorf("workspaceCan(%q, %q) = %v, want %v", tc.role, tc.action, got, tc.want)
 		}

@@ -37,6 +37,10 @@ type modelResponse struct {
 const modelColumns = `id,external_model_id,name,provider,base_url,context_window,status,is_fallback,credential_configured,credential_ref`
 
 func (s *server) adminRoutes(r chi.Router) {
+	r.Get("/workspaces", s.listAdminWorkspaces)
+	r.Get("/workspaces/{workspaceID}/ai-config", s.getWorkspaceAIConfig)
+	r.With(s.requireMutation).Post("/workspaces/{workspaceID}/ai-config", s.setWorkspaceAIConfig)
+	r.With(s.requireMutation).Patch("/workspaces/{workspaceID}/ai-config", s.setWorkspaceAIConfig)
 	r.Get("/models", s.listModels)
 	r.With(s.requireMutation).Post("/models", s.createModel)
 	r.With(s.requireMutation).Post("/models/test", s.testDraftModel)
@@ -163,7 +167,13 @@ func (s *server) updateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	m, err := scanModel(tx.QueryRow(r.Context(), `UPDATE ai_models SET external_model_id=$2,name=$3,provider=$4,base_url=$5,context_window=$6,api_key_ciphertext=CASE WHEN $7 THEN $8 ELSE api_key_ciphertext END,credential_ref=CASE WHEN $9 THEN NULLIF($10,'') ELSE credential_ref END,credential_configured=(CASE WHEN $7 THEN $8 ELSE api_key_ciphertext END IS NOT NULL OR CASE WHEN $9 THEN NULLIF($10,'') ELSE credential_ref END IS NOT NULL),updated_at=now() WHERE id=$1 RETURNING `+modelColumns, id, in.ModelID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Provider), strings.TrimSpace(in.BaseURL), in.ContextWindow, keyProvided, encrypted, refProvided, ref))
+	var currentBaseURL string
+	if err = tx.QueryRow(r.Context(), `SELECT base_url FROM ai_models WHERE id=$1 FOR UPDATE`, id).Scan(&currentBaseURL); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	originChanged := modelOriginChanged(currentBaseURL, in.BaseURL)
+	m, err := scanModel(tx.QueryRow(r.Context(), `UPDATE ai_models SET external_model_id=$2,name=$3,provider=$4,base_url=$5,context_window=$6,api_key_ciphertext=CASE WHEN $7 THEN $8 WHEN $11 THEN NULL ELSE api_key_ciphertext END,credential_ref=CASE WHEN $9 THEN NULLIF($10,'') WHEN $11 THEN NULL ELSE credential_ref END,credential_configured=(CASE WHEN $7 THEN $8 WHEN $11 THEN NULL ELSE api_key_ciphertext END IS NOT NULL OR CASE WHEN $9 THEN NULLIF($10,'') WHEN $11 THEN NULL ELSE credential_ref END IS NOT NULL),updated_at=now() WHERE id=$1 RETURNING `+modelColumns, id, in.ModelID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Provider), strings.TrimSpace(in.BaseURL), in.ContextWindow, keyProvided, encrypted, refProvided, ref, originChanged))
 	if err == nil {
 		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "models", "Model updated", id, m.Name, nil)
 	}
@@ -175,6 +185,12 @@ func (s *server) updateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, 200, m)
+}
+
+func modelOriginChanged(oldURL, newURL string) bool {
+	oldOrigin, oldErr := normalizedURLOrigin(oldURL)
+	newOrigin, newErr := normalizedURLOrigin(newURL)
+	return oldErr != nil || newErr != nil || oldOrigin != newOrigin
 }
 func (s *server) deleteModel(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.pathUUID(w, r)
@@ -331,8 +347,12 @@ func (s *server) testSavedModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) runModelTest(w http.ResponseWriter, r *http.Request, in modelInput) {
+	if !providerOriginAllowed(in.BaseURL, s.cfg.modelAllowedOrigins) {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "provider origin is not allowed")
+		return
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	result, err := testOpenAIConnection(r.Context(), client, in)
+	result, err := testOpenAIConnection(r.Context(), client, in, s.cfg.modelAllowedOrigins)
 	if err == nil {
 		s.writeJSON(w, http.StatusOK, result)
 		return
@@ -347,7 +367,10 @@ func (s *server) runModelTest(w http.ResponseWriter, r *http.Request, in modelIn
 	s.writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": message, "provider_status": providerStatus, "request_id": middleware.GetReqID(r.Context())})
 }
 
-func testOpenAIConnection(ctx context.Context, client *http.Client, in modelInput) (modelTestResponse, error) {
+func testOpenAIConnection(ctx context.Context, client *http.Client, in modelInput, allowedOrigins map[string]struct{}) (modelTestResponse, error) {
+	if !providerOriginAllowed(in.BaseURL, allowedOrigins) {
+		return modelTestResponse{}, &modelProviderError{Message: "provider origin is not allowed"}
+	}
 	endpoint := strings.TrimRight(strings.TrimSpace(in.BaseURL), "/") + "/chat/completions"
 	payload := map[string]any{"model": in.ModelID, "messages": []map[string]string{{"role": "user", "content": "Reply with OK"}}, "max_tokens": 1}
 	body, err := json.Marshal(payload)

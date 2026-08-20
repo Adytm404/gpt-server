@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-
-const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/$/, '')
+import { API_URL } from '../api/client'
 
 export type Session = {
   user: { id: string; full_name: string; email: string; platform_role: 'user' | 'admin' }

@@ -21,7 +21,7 @@ describe('apiRequest', () => {
   it('explains how to start an unreachable backend', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
     await expect(apiRequest('/api/v1/admin/models')).rejects.toEqual(expect.objectContaining({
-      message: 'Cannot reach backend at http://localhost:8080. Start it with cd backend && go run .',
+      message: 'Cannot reach backend at same origin. Start it with cd backend && go run .',
       status: 0,
     }))
   })

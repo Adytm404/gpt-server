@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import AdminConsole from './AdminConsole'
@@ -144,4 +144,30 @@ it('states private published plan remains hidden', async () => {
   await userEvent.click(await screen.findByRole('button', { name: /Publish plan/ }))
   expect(screen.getByText(/remain hidden from public catalog/)).toBeInTheDocument()
   expect(screen.getByText('Unchanged')).toBeInTheDocument()
+})
+
+it('configures workspace AI with selected model and monthly quota', async () => {
+  const requests: Array<{ url: string; body?: unknown }> = []
+  let resolveSave!: (response: Response) => void
+  const saveResponse = new Promise<Response>(resolve => { resolveSave = resolve })
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const url = String(input); requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    if (url.endsWith('/admin/workspaces')) return new Response(JSON.stringify({ workspaces: [{ id: 'workspace-1', name: 'Northstar', created_at: '2026-08-21T00:00:00Z' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (url.endsWith('/admin/models')) return new Response(JSON.stringify({ models: [model] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    if (url.endsWith('/ai-config') && !init?.method) return new Response(JSON.stringify({ error: 'not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+    if (url.endsWith('/ai-config') && init?.method === 'POST') return saveResponse
+    throw new Error(`Unexpected request: ${url}`)
+  })
+  render(<MemoryRouter initialEntries={['/workspaces']}><AdminConsole /></MemoryRouter>)
+  expect(await screen.findByText('Northstar')).toBeInTheDocument()
+  expect(screen.getByText('0 disables chat for this workspace.')).toBeInTheDocument()
+  await userEvent.selectOptions(screen.getByLabelText('Model for Northstar'), 'model-1')
+  await userEvent.clear(screen.getByLabelText('Monthly token limit for Northstar'))
+  await userEvent.type(screen.getByLabelText('Monthly token limit for Northstar'), '250000')
+  await userEvent.click(screen.getByRole('button', { name: 'Save Northstar AI configuration' }))
+  expect(screen.getByLabelText('Model for Northstar')).toBeDisabled()
+  expect(screen.getByLabelText('Monthly token limit for Northstar')).toBeDisabled()
+  await waitFor(() => expect(requests.find(request => request.body)).toMatchObject({ body: { default_model_id: 'model-1', monthly_token_limit: 250000 } }))
+  resolveSave(new Response(JSON.stringify({ workspace_id: 'workspace-1', default_model_id: 'model-1', monthly_token_limit: 250000, model_status: 'active' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+  await waitFor(() => expect(screen.getByLabelText('Model for Northstar')).not.toBeDisabled())
 })

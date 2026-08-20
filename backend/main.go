@@ -40,19 +40,27 @@ const (
 )
 
 type config struct {
-	addr, frontendOrigin                              string
-	dbHost, dbPort, dbUser, dbName, dbPassword, dbSSL string
-	serverKeyEncryptionKey                            string
-	modelKeyEncryptionKey                             string
-	sessionTTL, sshConnectTimeout                     time.Duration
-	cookieSecure                                      bool
+	addr, frontendOrigin                               string
+	dbHost, dbPort, dbUser, dbName, dbPassword, dbSSL  string
+	serverKeyEncryptionKey                             string
+	modelKeyEncryptionKey                              string
+	sessionTTL, sshConnectTimeout, modelRequestTimeout time.Duration
+	cookieSecure                                       bool
+	modelAllowedOrigins                                map[string]struct{}
 }
 
 type server struct {
-	db             *pgxpool.Pool
-	cfg            config
-	limiter        *loginLimiter
-	resolveSession func(context.Context, string) (sessionAuth, error)
+	db               *pgxpool.Pool
+	cfg              config
+	limiter          *loginLimiter
+	planningLimiter  *planningLimiter
+	planningMu       sync.Mutex
+	planningLocks    map[uuid.UUID]*sync.Mutex
+	cancelMu         sync.Mutex
+	operationCancels map[uuid.UUID]context.CancelFunc
+	sseMu            sync.Mutex
+	sseStreams       map[string]int
+	resolveSession   func(context.Context, string) (sessionAuth, error)
 }
 
 type loginLimiter struct {
@@ -117,22 +125,27 @@ func main() {
 	}
 	defer db.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	if err := db.Ping(ctx); err != nil {
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer startupCancel()
+	if err := db.Ping(startupCtx); err != nil {
 		log.Fatalf("connect database: %v", err)
 	}
-	if err := migrate(ctx, db); err != nil {
+	if err := migrate(startupCtx, db); err != nil {
 		log.Fatalf("migrate database: %v", err)
 	}
 
-	s := &server{db: db, cfg: cfg, limiter: newLoginLimiter(10, time.Minute)}
+	s := &server{db: db, cfg: cfg, limiter: newLoginLimiter(10, time.Minute), planningLimiter: newPlanningLimiter(20, 5*time.Minute), planningLocks: make(map[uuid.UUID]*sync.Mutex), operationCancels: make(map[uuid.UUID]context.CancelFunc), sseStreams: make(map[string]int)}
+	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer recoveryCancel()
+	if err := s.failStaleOperations(recoveryCtx); err != nil {
+		log.Fatalf("recover stale operations: %v", err)
+	}
 	httpServer := &http.Server{
 		Addr:              cfg.addr,
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      cfg.sshConnectTimeout + 10*time.Second,
+		WriteTimeout:      0,
 		IdleTimeout:       60 * time.Second,
 	}
 	log.Printf("auth server listening on %s", cfg.addr)
@@ -164,6 +177,10 @@ func loadConfig() (config, error) {
 	if err != nil || cfg.sshConnectTimeout < 5*time.Second || cfg.sshConnectTimeout > 2*time.Minute {
 		return config{}, errors.New("SSH_CONNECT_TIMEOUT must be between 5s and 2m")
 	}
+	cfg.modelRequestTimeout, err = time.ParseDuration(env("MODEL_REQUEST_TIMEOUT", "60s"))
+	if err != nil || cfg.modelRequestTimeout < time.Second || cfg.modelRequestTimeout > 5*time.Minute {
+		return config{}, errors.New("MODEL_REQUEST_TIMEOUT must be between 1s and 5m")
+	}
 	cfg.cookieSecure, err = strconv.ParseBool(env("COOKIE_SECURE", "false"))
 	if err != nil {
 		return config{}, errors.New("COOKIE_SECURE must be true or false")
@@ -174,11 +191,32 @@ func loadConfig() (config, error) {
 			return config{}, errors.New("MODEL_KEY_ENCRYPTION_KEY must be base64-encoded 32 bytes when set")
 		}
 	}
+	cfg.modelAllowedOrigins, err = parseAllowedOrigins(os.Getenv("MODEL_ALLOWED_ORIGINS"))
+	if err != nil {
+		return config{}, err
+	}
 	origin, err := url.Parse(cfg.frontendOrigin)
 	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.User != nil {
 		return config{}, errors.New("APP_FRONTEND_ORIGIN must be an origin without a path")
 	}
 	return cfg, nil
+}
+
+func parseAllowedOrigins(value string) (map[string]struct{}, error) {
+	out := make(map[string]struct{})
+	for _, raw := range strings.Split(value, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		parsed, parseErr := url.Parse(raw)
+		origin, err := normalizedURLOrigin(raw)
+		if parseErr != nil || err != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+			return nil, errors.New("MODEL_ALLOWED_ORIGINS must contain comma-separated exact http(s) origins")
+		}
+		out[origin] = struct{}{}
+	}
+	return out, nil
 }
 
 func env(key, fallback string) string {
@@ -221,6 +259,8 @@ func (s *server) routes() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.authenticate)
 			r.Route("/servers", s.serverRoutes)
+			r.Route("/chat", s.chatRoutes)
+			r.Route("/operations", s.operationRoutes)
 			r.Route("/admin", func(r chi.Router) {
 				r.Use(s.requireAdmin)
 				s.adminRoutes(r)

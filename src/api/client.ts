@@ -1,4 +1,4 @@
-const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8080').replace(/\/$/, '')
+export const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
 
 const mutationMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
@@ -34,7 +34,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Network request failed'
     throw new ApiError(detail === 'Failed to fetch'
-      ? `Cannot reach backend at ${API_URL}. Start it with cd backend && go run .`
+      ? `Cannot reach backend at ${API_URL || 'same origin'}. Start it with cd backend && go run .`
       : detail, 0)
   }
 

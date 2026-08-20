@@ -74,7 +74,7 @@ func TestOpenAIConnectionNoKeySuccess(t *testing.T) {
 	}))
 	defer provider.Close()
 
-	result, err := testOpenAIConnection(context.Background(), provider.Client(), modelInput{ModelID: "local-model", BaseURL: provider.URL + "/v1"})
+	result, err := testOpenAIConnection(context.Background(), provider.Client(), modelInput{ModelID: "local-model", BaseURL: provider.URL + "/v1"}, map[string]struct{}{provider.URL: {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestOpenAIConnectionBearerKeySuccess(t *testing.T) {
 	}))
 	defer provider.Close()
 
-	_, err := testOpenAIConnection(context.Background(), provider.Client(), modelInput{ModelID: "model", BaseURL: provider.URL, APIKey: "sk-secret"})
+	_, err := testOpenAIConnection(context.Background(), provider.Client(), modelInput{ModelID: "model", BaseURL: provider.URL, APIKey: "sk-secret"}, map[string]struct{}{provider.URL: {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestOpenAIConnectionProviderFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := httptest.NewServer(tc.handler)
 			defer provider.Close()
-			_, err := testOpenAIConnection(context.Background(), provider.Client(), modelInput{ModelID: "model", BaseURL: provider.URL, APIKey: "secret-not-in-error"})
+			_, err := testOpenAIConnection(context.Background(), provider.Client(), modelInput{ModelID: "model", BaseURL: provider.URL, APIKey: "secret-not-in-error"}, map[string]struct{}{provider.URL: {}})
 			var providerErr *modelProviderError
 			if err == nil || !errors.As(err, &providerErr) {
 				t.Fatalf("error = %T %v", err, err)
@@ -135,7 +135,7 @@ func TestOpenAIConnectionTimeout(t *testing.T) {
 	defer provider.Close()
 	client := provider.Client()
 	client.Timeout = 10 * time.Millisecond
-	_, err := testOpenAIConnection(context.Background(), client, modelInput{ModelID: "model", BaseURL: provider.URL})
+	_, err := testOpenAIConnection(context.Background(), client, modelInput{ModelID: "model", BaseURL: provider.URL}, map[string]struct{}{provider.URL: {}})
 	if err == nil {
 		t.Fatal("timeout accepted")
 	}
@@ -148,7 +148,7 @@ func TestDraftModelTestRouteAuthAndCSRF(t *testing.T) {
 	defer provider.Close()
 	payload := `{"name":"Local","provider":"OpenAI","model_id":"local","base_url":"` + provider.URL + `","context_window":4096}`
 
-	s := &server{cfg: config{frontendOrigin: "https://app.example.com"}}
+	s := &server{cfg: config{frontendOrigin: "https://app.example.com", modelAllowedOrigins: map[string]struct{}{provider.URL: {}}}}
 	unauthenticated := httptest.NewRecorder()
 	s.routes().ServeHTTP(unauthenticated, httptest.NewRequest(http.MethodPost, "/api/v1/admin/models/test", strings.NewReader(payload)))
 	if unauthenticated.Code != http.StatusUnauthorized {
@@ -186,5 +186,17 @@ func TestDraftModelTestRouteAuthAndCSRF(t *testing.T) {
 	s.routes().ServeHTTP(valid, validReq)
 	if valid.Code != http.StatusOK || !strings.Contains(valid.Body.String(), `"status":"ok"`) {
 		t.Fatalf("valid route response = %d %s", valid.Code, valid.Body.String())
+	}
+}
+
+func TestModelOriginChanged(t *testing.T) {
+	if modelOriginChanged("https://api.example.com/v1", "https://api.example.com/v2") {
+		t.Fatal("path-only change treated as origin change")
+	}
+	if !modelOriginChanged("https://api.example.com/v1", "https://other.example.com/v1") {
+		t.Fatal("host change did not change origin")
+	}
+	if !modelOriginChanged("https://api.example.com/v1", "http://api.example.com/v1") {
+		t.Fatal("scheme change did not change origin")
 	}
 }

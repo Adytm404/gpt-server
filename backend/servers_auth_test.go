@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -44,7 +45,7 @@ func testPrivateKey(t *testing.T) (string, ssh.Signer) {
 }
 
 func validServerInput() serverInput {
-	return serverInput{Name: "Production", Host: "127.0.0.1", Port: 22, SSHUser: "deploy", Environment: "production"}
+	return serverInput{Name: "Production", Host: "127.0.0.1", Port: 22, SSHUser: "deploy", Environment: "production", HostFingerprint: "SHA256:abcdefghijklmnop"}
 }
 
 func TestValidateServerCreateCredentials(t *testing.T) {
@@ -74,6 +75,16 @@ func TestValidateServerCreateCredentials(t *testing.T) {
 		if err := validateServerCreateInput(in); err == nil {
 			t.Errorf("invalid create credentials accepted: method=%q", in.AuthMethod)
 		}
+	}
+}
+
+func TestValidateServerCreateRequiresFingerprint(t *testing.T) {
+	privateKey, _ := testPrivateKey(t)
+	in := validServerInput()
+	in.PrivateKey = privateKey
+	in.HostFingerprint = ""
+	if err := validateServerCreateInput(in); err == nil {
+		t.Fatal("server without fingerprint accepted")
 	}
 }
 
@@ -273,12 +284,19 @@ func (s *testSSHServer) setExec(output, commandError string, delay time.Duration
 
 func TestParseHealthInventory(t *testing.T) {
 	fixture := `operating_system=Ubuntu 24.04.1 LTS
+hostname=api-01.example.internal
+architecture=x86_64
+kernel=6.8.0-52-generic
+cpu_model=Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz
+cpu_cores=8
 uptime_seconds=98765
 cpu1=100 10 40 850 0 0 0 0
 cpu2=130 10 50 910 0 0 0 0
 memory_total_kb=8000000
 memory_available_kb=2000000
+disk_total_kb=104857600
 disk_percent=73%
+virtualization=kvm
 service=cron.service|failed
 service=ssh|active
 `
@@ -288,6 +306,12 @@ service=ssh|active
 	}
 	if got.OperatingSystem != "Ubuntu 24.04.1 LTS" || got.UptimeSeconds != 98765 {
 		t.Fatalf("identity = %+v", got)
+	}
+	if got.Hostname != "api-01.example.internal" || got.Architecture != "x86_64" || got.Kernel != "6.8.0-52-generic" || got.CPUModel != "Intel(R) Xeon(R) Gold 6338 CPU @ 2.00GHz" || got.CPUCores != 8 || got.Virtualization != "kvm" {
+		t.Fatalf("hardware = %+v", got)
+	}
+	if got.MemoryTotalBytes != 8192000000 || got.DiskTotalBytes != 107374182400 {
+		t.Fatalf("capacity = %+v", got)
 	}
 	if got.CPUPercent != 40 || got.MemoryPercent != 75 || got.DiskPercent != 73 {
 		t.Fatalf("metrics = cpu %.2f memory %.2f disk %.2f", got.CPUPercent, got.MemoryPercent, got.DiskPercent)
@@ -301,18 +325,41 @@ func TestParseHealthInventoryRejectsMalformedAndClampsPercentages(t *testing.T) 
 	if _, err := parseHealthInventory("operating_system=Linux\nuptime_seconds=nope\n"); err == nil {
 		t.Fatal("malformed uptime accepted")
 	}
-	got, err := parseHealthInventory("operating_system=Linux\nuptime_seconds=1\ncpu1=1 0 0 9\ncpu2=101 0 0 9\nmemory_total_kb=10\nmemory_available_kb=-5\ndisk_percent=120\n")
+	valid := "operating_system=Linux\nhostname=node\narchitecture=aarch64\nkernel=6.1\ncpu_model=Neoverse-N1\ncpu_cores=4\nuptime_seconds=1\ncpu1=1 0 0 9\ncpu2=101 0 0 9\nmemory_total_kb=10\nmemory_available_kb=-5\ndisk_total_kb=20\ndisk_percent=120\n"
+	got, err := parseHealthInventory(valid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.CPUPercent != 100 || got.MemoryPercent != 100 || got.DiskPercent != 100 {
 		t.Fatalf("percentages not clamped: %+v", got)
 	}
+	for _, tc := range []struct{ old, replacement string }{
+		{"cpu_cores=4", "cpu_cores=0"},
+		{"cpu_cores=4", "cpu_cores=nope"},
+		{"memory_total_kb=10", "memory_total_kb=0"},
+		{"disk_total_kb=20", "disk_total_kb=0"},
+	} {
+		malformed := strings.Replace(valid, tc.old, tc.replacement, 1)
+		if _, err := parseHealthInventory(malformed); err == nil {
+			t.Errorf("malformed specification accepted: %s", tc.replacement)
+		}
+	}
+}
+
+func TestParseHealthInventorySanitizesHardwareStrings(t *testing.T) {
+	fixture := "operating_system=Linux\nhostname=  node-01  \narchitecture=x86_64\nkernel=6.8\ncpu_model=" + strings.Repeat("x", maxHardwareValueLength+20) + "\ncpu_cores=2\nuptime_seconds=1\ncpu1=1 0 0 9\ncpu2=2 0 0 18\nmemory_total_kb=10\nmemory_available_kb=5\ndisk_total_kb=20\ndisk_percent=50\nvirtualization=none\n"
+	got, err := parseHealthInventory(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Hostname != "node-01" || len(got.CPUModel) != maxHardwareValueLength || got.Virtualization != "none" {
+		t.Fatalf("sanitized hardware = %+v", got)
+	}
 }
 
 func TestCollectHealthInventoryUsesFixedCommand(t *testing.T) {
 	srv := startTestSSHServer(t)
-	srv.setExec("operating_system=Debian GNU/Linux 12\nuptime_seconds=12\ncpu1=1 0 1 8\ncpu2=2 0 2 16\nmemory_total_kb=100\nmemory_available_kb=40\ndisk_percent=20\nservice=ssh|active\n", "", 0)
+	srv.setExec("operating_system=Debian GNU/Linux 12\nhostname=debian\narchitecture=x86_64\nkernel=6.1.0\ncpu_model=AMD EPYC\ncpu_cores=4\nuptime_seconds=12\ncpu1=1 0 1 8\ncpu2=2 0 2 16\nmemory_total_kb=100\nmemory_available_kb=40\ndisk_total_kb=1000\ndisk_percent=20\nservice=ssh|active\n", "", 0)
 	client, _, err := dialAuthenticatedSSH(context.Background(), srv.target(authMethodPassword, ssh.FingerprintSHA256(srv.hostSigner.PublicKey())), srv.password)
 	if err != nil {
 		t.Fatal(err)
@@ -332,6 +379,27 @@ func TestCollectHealthInventoryUsesFixedCommand(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("health command not executed")
+	}
+}
+
+func TestHealthInventoryCommandCollectsHardwareWithoutInterpolation(t *testing.T) {
+	for _, required := range []string{"hostname", "uname -m", "uname -r", "/proc/cpuinfo", "model name", "processor", "Hardware", "getconf _NPROCESSORS_ONLN", "/proc/meminfo", "df -Pk /", "systemd-detect-virt"} {
+		if !strings.Contains(healthInventoryCommand, required) {
+			t.Errorf("health command missing %q", required)
+		}
+	}
+}
+
+func TestHealthInventoryDetails(t *testing.T) {
+	inventory := healthInventory{Hostname: "node-01", Architecture: "x86_64", Kernel: "6.8", CPUModel: "AMD EPYC", CPUCores: 16, MemoryTotalBytes: 32 * 1024 * 1024 * 1024, DiskTotalBytes: 500 * 1024 * 1024 * 1024, Virtualization: "kvm"}
+	details := healthInventoryDetails("online", "", inventory)
+	want := map[string]any{"hostname": "node-01", "architecture": "x86_64", "kernel": "6.8", "cpu_model": "AMD EPYC", "cpu_cores": 16, "memory_total_bytes": int64(32 * 1024 * 1024 * 1024), "disk_total_bytes": int64(500 * 1024 * 1024 * 1024), "virtualization": "kvm", "collector": "linux_procfs"}
+	if !reflect.DeepEqual(details, want) {
+		t.Fatalf("details = %#v, want %#v", details, want)
+	}
+	failed := healthInventoryDetails("offline", "connection failed", inventory)
+	if !reflect.DeepEqual(failed, map[string]any{"error": "connection failed"}) {
+		t.Fatalf("failed details = %#v", failed)
 	}
 }
 

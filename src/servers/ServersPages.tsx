@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import {
   serversApi,
+  formatBytes,
   type CreateServerDTO,
   type Server,
   type ServerSummaryDTO,
@@ -761,6 +762,7 @@ export function ServerDetailPage() {
               Run health check <ArrowRight size={15} />
             </button>
           </div>
+          <Specifications server={server} />
           <Metrics snapshot={snapshot} />
           <Services server={server} />
         </>
@@ -795,6 +797,41 @@ export function ServerDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function Specifications({ server }: { server: Server }) {
+  const specification = server.specification;
+  const values = [
+    ["CPU model", specification.cpuModel],
+    ["CPU cores", specification.cpuCores && `${specification.cpuCores} logical cores`],
+    ["Installed memory", specification.memoryTotalBytes && formatBytes(specification.memoryTotalBytes)],
+    ["Root disk capacity", specification.diskTotalBytes && formatBytes(specification.diskTotalBytes)],
+    ["Architecture", specification.architecture],
+    ["Kernel", specification.kernel],
+    ["Hostname", specification.hostname],
+    ["Virtualization", specification.virtualization],
+  ].filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0);
+
+  return (
+    <section className="specification-panel" aria-labelledby="server-specifications-heading">
+      <div className="specification-head">
+        <span className="page-eyebrow">Hardware profile</span>
+        <h2 id="server-specifications-heading">Server specifications</h2>
+      </div>
+      {values.length ? (
+        <dl className="specification-grid">
+          {values.map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <div className="server-empty-panel compact">Run health check to collect hardware specifications.</div>
+      )}
+    </section>
   );
 }
 

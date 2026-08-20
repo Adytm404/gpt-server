@@ -279,6 +279,10 @@ func (s *server) testServer(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, r, err)
 		return
 	}
+	if target.HostFingerprint == "" {
+		s.writeError(w, r, http.StatusConflict, "server host fingerprint is required")
+		return
+	}
 	secret, decryptErr := decryptServerCredential(s.cfg.serverKeyEncryptionKey, ciphertext)
 	var result sshConnectionResult
 	if decryptErr != nil {
@@ -339,6 +343,10 @@ func (s *server) healthServer(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, r, err)
 		return
 	}
+	if target.HostFingerprint == "" {
+		s.writeError(w, r, http.StatusConflict, "server host fingerprint is required")
+		return
+	}
 	status, lastError := "offline", "server credential unavailable"
 	result := offlineSSHResult(target, lastError)
 	var inventory healthInventory
@@ -364,12 +372,7 @@ func (s *server) healthServer(w http.ResponseWriter, r *http.Request) {
 	if services == nil {
 		services = []serviceHealthResponse{}
 	}
-	details := map[string]any{}
-	if status == "online" {
-		details["collector"] = "linux_procfs"
-	} else {
-		details["error"] = lastError
-	}
+	details := healthInventoryDetails(status, lastError, inventory)
 	servicesJSON, _ := json.Marshal(services)
 	detailsJSON, _ := json.Marshal(details)
 	tx, err := s.db.Begin(r.Context())
@@ -562,6 +565,7 @@ func dialAuthenticatedSSH(ctx context.Context, target sshConnectionTarget, secre
 		return nil, result, err
 	}
 	client := ssh.NewClient(clientConn, channels, requests)
+	_ = conn.SetDeadline(time.Time{})
 	result.Status = "online"
 	result.Error = ""
 	result.FingerprintVerified = target.HostFingerprint != "" && observed == target.HostFingerprint
@@ -569,6 +573,7 @@ func dialAuthenticatedSSH(ctx context.Context, target sshConnectionTarget, secre
 }
 
 const maxHealthOutputBytes = 256 * 1024
+const maxHardwareValueLength = 255
 
 const healthInventoryCommand = `sh -c '
 os=""
@@ -580,13 +585,30 @@ if [ -r /etc/os-release ]; then
 fi
 if [ -z "$os" ]; then os=$(uname -srm 2>/dev/null || uname -a); fi
 printf "operating_system=%s\n" "$os"
+host=$(hostname 2>/dev/null || true); if [ -z "$host" ]; then host=$(uname -n 2>/dev/null || true); fi
+printf "hostname=%s\n" "$host"
+printf "architecture=%s\n" "$(uname -m 2>/dev/null || true)"
+printf "kernel=%s\n" "$(uname -r 2>/dev/null || true)"
+cpu_model=""
+if [ -r /proc/cpuinfo ]; then
+  cpu_model=$(grep -m 1 "^model name[[:space:]]*:" /proc/cpuinfo 2>/dev/null | cut -d: -f2-)
+  if [ -z "$cpu_model" ]; then cpu_model=$(grep -m 1 -E "^(Processor|processor|Hardware)[[:space:]]*:" /proc/cpuinfo 2>/dev/null | cut -d: -f2-); fi
+fi
+if [ -z "$cpu_model" ]; then cpu_model=$(uname -p 2>/dev/null || true); fi
+if [ -z "$cpu_model" ] || [ "$cpu_model" = "unknown" ]; then cpu_model=$(uname -m 2>/dev/null || true); fi
+cpu_model=${cpu_model#"${cpu_model%%[![:space:]]*}"}
+printf "cpu_model=%s\n" "$cpu_model"
+cpu_cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)
+case "$cpu_cores" in ""|0|*[!0-9]*) if [ -r /proc/cpuinfo ]; then cpu_cores=$(grep -c "^processor[[:space:]]*:" /proc/cpuinfo 2>/dev/null || true); fi;; esac
+printf "cpu_cores=%s\n" "$cpu_cores"
 if [ -r /proc/uptime ]; then read -r uptime rest < /proc/uptime; else uptime=0; fi
 printf "uptime_seconds=%s\n" "${uptime%%.*}"
 if [ -r /proc/stat ]; then read -r cpu a b c d e f g h rest < /proc/stat; printf "cpu1=%s %s %s %s %s %s %s %s\n" "$a" "$b" "$c" "$d" "$e" "$f" "$g" "$h"; sleep 0.25; read -r cpu a b c d e f g h rest < /proc/stat; printf "cpu2=%s %s %s %s %s %s %s %s\n" "$a" "$b" "$c" "$d" "$e" "$f" "$g" "$h"; fi
 if [ -r /proc/meminfo ]; then
   while read -r key value unit; do case "$key" in MemTotal:) printf "memory_total_kb=%s\n" "$value";; MemAvailable:) printf "memory_available_kb=%s\n" "$value";; esac; done < /proc/meminfo
 fi
-set -- $(df -P / 2>/dev/null | tail -n 1); printf "disk_percent=%s\n" "$5"
+set -- $(df -Pk / 2>/dev/null | tail -n 1); printf "disk_total_kb=%s\n" "$2"; printf "disk_percent=%s\n" "$5"
+if command -v systemd-detect-virt >/dev/null 2>&1; then printf "virtualization=%s\n" "$(systemd-detect-virt 2>/dev/null || true)"; fi
 if command -v systemctl >/dev/null 2>&1; then
   systemctl --failed --no-legend --no-pager --plain 2>/dev/null | while read -r unit load active sub rest; do [ -n "$unit" ] && printf "service=%s|failed\n" "$unit"; done
   for unit in ssh sshd; do state=$(systemctl is-active "$unit" 2>/dev/null || true); [ "$state" != "unknown" ] && [ -n "$state" ] && printf "service=%s|%s\n" "$unit" "$state"; done
@@ -594,12 +616,20 @@ fi
 '`
 
 type healthInventory struct {
-	OperatingSystem string
-	UptimeSeconds   int64
-	CPUPercent      float64
-	MemoryPercent   float64
-	DiskPercent     float64
-	Services        []serviceHealthResponse
+	OperatingSystem  string
+	Hostname         string
+	Architecture     string
+	Kernel           string
+	CPUModel         string
+	CPUCores         int
+	MemoryTotalBytes int64
+	DiskTotalBytes   int64
+	Virtualization   string
+	UptimeSeconds    int64
+	CPUPercent       float64
+	MemoryPercent    float64
+	DiskPercent      float64
+	Services         []serviceHealthResponse
 }
 
 type limitedHealthBuffer struct {
@@ -684,18 +714,23 @@ func parseHealthInventory(output string) (healthInventory, error) {
 	if err != nil || uptime < 0 {
 		return healthInventory{}, errors.New("invalid uptime in SSH health output")
 	}
-	operatingSystem := strings.TrimSpace(values["operating_system"])
+	operatingSystem := sanitizeHardwareValue(values["operating_system"], "")
 	if operatingSystem == "" {
 		return healthInventory{}, errors.New("missing operating system in SSH health output")
+	}
+	cpuCores, err := strconv.Atoi(strings.TrimSpace(values["cpu_cores"]))
+	if err != nil || cpuCores <= 0 {
+		return healthInventory{}, errors.New("invalid CPU core count in SSH health output")
 	}
 	cpu, err := cpuPercent(values["cpu1"], values["cpu2"])
 	if err != nil {
 		return healthInventory{}, err
 	}
-	total, err := strconv.ParseFloat(values["memory_total_kb"], 64)
-	if err != nil || total <= 0 {
+	memoryTotalBytes, err := kilobytesToBytes(values["memory_total_kb"])
+	if err != nil {
 		return healthInventory{}, errors.New("invalid memory total in SSH health output")
 	}
+	total := float64(memoryTotalBytes / 1024)
 	available, err := strconv.ParseFloat(values["memory_available_kb"], 64)
 	if err != nil {
 		return healthInventory{}, errors.New("invalid memory available in SSH health output")
@@ -704,14 +739,63 @@ func parseHealthInventory(output string) (healthInventory, error) {
 	if err != nil {
 		return healthInventory{}, errors.New("invalid disk usage in SSH health output")
 	}
+	diskTotalBytes, err := kilobytesToBytes(values["disk_total_kb"])
+	if err != nil {
+		return healthInventory{}, errors.New("invalid disk total in SSH health output")
+	}
 	return healthInventory{
-		OperatingSystem: operatingSystem,
-		UptimeSeconds:   uptime,
-		CPUPercent:      roundedPercent(cpu),
-		MemoryPercent:   roundedPercent((total - available) / total * 100),
-		DiskPercent:     roundedPercent(disk),
-		Services:        services,
+		OperatingSystem:  operatingSystem,
+		Hostname:         sanitizeHardwareValue(values["hostname"], "unknown"),
+		Architecture:     sanitizeHardwareValue(values["architecture"], "unknown"),
+		Kernel:           sanitizeHardwareValue(values["kernel"], "unknown"),
+		CPUModel:         sanitizeHardwareValue(values["cpu_model"], "unknown"),
+		CPUCores:         cpuCores,
+		MemoryTotalBytes: memoryTotalBytes,
+		DiskTotalBytes:   diskTotalBytes,
+		Virtualization:   sanitizeHardwareValue(values["virtualization"], ""),
+		UptimeSeconds:    uptime,
+		CPUPercent:       roundedPercent(cpu),
+		MemoryPercent:    roundedPercent((total - available) / total * 100),
+		DiskPercent:      roundedPercent(disk),
+		Services:         services,
 	}, nil
+}
+
+func kilobytesToBytes(value string) (int64, error) {
+	kilobytes, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || kilobytes <= 0 || kilobytes > math.MaxInt64/1024 {
+		return 0, errors.New("invalid kilobyte value")
+	}
+	return kilobytes * 1024, nil
+}
+
+func sanitizeHardwareValue(value, fallback string) string {
+	value = strings.TrimSpace(strings.ToValidUTF8(value, ""))
+	runes := []rune(value)
+	if len(runes) > maxHardwareValueLength {
+		value = string(runes[:maxHardwareValueLength])
+	}
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func healthInventoryDetails(status, lastError string, inventory healthInventory) map[string]any {
+	if status != "online" {
+		return map[string]any{"error": lastError}
+	}
+	return map[string]any{
+		"hostname":           inventory.Hostname,
+		"architecture":       inventory.Architecture,
+		"kernel":             inventory.Kernel,
+		"cpu_model":          inventory.CPUModel,
+		"cpu_cores":          inventory.CPUCores,
+		"memory_total_bytes": inventory.MemoryTotalBytes,
+		"disk_total_bytes":   inventory.DiskTotalBytes,
+		"virtualization":     inventory.Virtualization,
+		"collector":          "linux_procfs",
+	}
 }
 
 func cpuPercent(first, second string) (float64, error) {

@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,54 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestChatOperationsMigrationHasIsolationConstraintsAndNoSeeds(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/010_chat_operations.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{"workspace_id uuid PRIMARY KEY", "monthly_token_limit bigint NOT NULL DEFAULT 0", "CREATE TABLE IF NOT EXISTS chat_threads", "CREATE TABLE IF NOT EXISTS chat_messages", "CREATE TABLE IF NOT EXISTS operations", "server_updated_at timestamptz NOT NULL", "CREATE TABLE IF NOT EXISTS operation_steps", "CREATE TABLE IF NOT EXISTS operation_events", "CREATE TABLE IF NOT EXISTS token_usage", "UNIQUE(operation_id, position)", "UNIQUE(operation_id)", "UNIQUE(id, workspace_id)", "FOREIGN KEY (server_id, workspace_id)", "FOREIGN KEY (thread_id, workspace_id)", "FOREIGN KEY (operation_id, workspace_id)", "total_tokens = input_tokens + output_tokens"} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("010 migration missing %q", clause)
+		}
+	}
+	for _, forbidden := range []string{"INSERT INTO workspace_subscriptions", "INSERT INTO chat_threads", "INSERT INTO chat_messages", "api.openai.com"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("010 migration contains seed/fallback %q", forbidden)
+		}
+	}
+}
+
+func TestChatMigrationOnlyRebuildsEmptyLegacyOperations(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/010_chat_operations.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{
+		"incompatible legacy operation tables contain data; manual migration required",
+		"operation_count <> 0 OR step_count <> 0 OR event_count <> 0",
+		"column_name='thread_id'",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Fatalf("legacy operation migration guard missing %q", clause)
+		}
+	}
+}
+
+func TestActiveOperationMigrationRepairsDuplicatesBeforeIndex(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/011_one_active_operation_per_thread.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	cleanup := strings.Index(content, "row_number() OVER")
+	index := strings.Index(content, "CREATE UNIQUE INDEX")
+	if cleanup < 0 || index < 0 || cleanup > index || !strings.Contains(content, "status='failed'") {
+		t.Fatalf("011 does not safely close duplicates before index: %s", content)
 	}
 }
 
