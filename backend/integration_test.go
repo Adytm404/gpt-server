@@ -89,6 +89,13 @@ func TestIntegrationDraftSlugAndPublishedModelDependency(t *testing.T) {
 	if _, err = tx.Exec(ctx, `INSERT INTO ai_models(id,external_model_id,name,provider,context_window) VALUES($1,$2,'Integration Model','test',1024)`, modelID, "integration-"+modelID.String()); err != nil {
 		t.Fatal(err)
 	}
+	var defaultBaseURL string
+	if err = tx.QueryRow(ctx, `SELECT base_url FROM ai_models WHERE id=$1`, modelID).Scan(&defaultBaseURL); err != nil || defaultBaseURL != "" {
+		t.Fatalf("default base_url=%q err=%v", defaultBaseURL, err)
+	}
+	if err = tx.QueryRow(ctx, `UPDATE ai_models SET base_url=$2 WHERE id=$1 RETURNING base_url`, modelID, "http://localhost:11434/v1").Scan(&defaultBaseURL); err != nil || defaultBaseURL != "http://localhost:11434/v1" {
+		t.Fatalf("persisted base_url=%q err=%v", defaultBaseURL, err)
+	}
 	if _, err = tx.Exec(ctx, `INSERT INTO subscription_plans(id,slug) VALUES($1,$2)`, planID, "integration-"+planID.String()); err != nil {
 		t.Fatal(err)
 	}

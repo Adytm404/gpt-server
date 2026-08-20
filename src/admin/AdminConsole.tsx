@@ -373,6 +373,7 @@ function ModelDrawer({
       name: "",
       provider: "",
       context: "",
+      baseUrl: "",
       status: "Active",
       fallback: false,
       credentialConfigured: false,
@@ -416,6 +417,7 @@ function ModelDrawer({
             <input
               required
               value={draft.name}
+              placeholder="GPT-4.1 Mini"
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             />
           </label>
@@ -424,6 +426,7 @@ function ModelDrawer({
             <input
               required
               value={draft.modelId || ""}
+              placeholder="gpt-4.1-mini"
               onChange={(e) => setDraft({ ...draft, modelId: e.target.value })}
             />
           </label>
@@ -432,6 +435,7 @@ function ModelDrawer({
               <span>Provider</span>
               <input
                 value={draft.provider}
+                placeholder="OpenAI-compatible"
                 onChange={(e) =>
                   setDraft({ ...draft, provider: e.target.value })
                 }
@@ -441,12 +445,25 @@ function ModelDrawer({
               <span>Context window</span>
               <input
                 value={draft.context}
+                placeholder="128K"
                 onChange={(e) =>
                   setDraft({ ...draft, context: e.target.value })
                 }
               />
             </label>
           </div>
+          <label>
+            <span>OpenAI-compatible base URL</span>
+            <input
+              aria-label="OpenAI-compatible base URL"
+              value={draft.baseUrl}
+              placeholder="https://api.openai.com/v1"
+              onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
+            />
+            <small>
+              Endpoint must expose OpenAI-compatible /chat/completions.
+            </small>
+          </label>
           <label className="admin-check">
             <input
               type="checkbox"
@@ -468,8 +485,11 @@ function ModelDrawer({
             <input
               value={draft.credentialRef || ""}
               onChange={(e) => setDraft({ ...draft, credentialRef: e.target.value })}
-              placeholder="vault://models/provider"
+              placeholder="vault://models/openai"
             />
+            <small>
+              Credential reference points to a server-side secret and is not an API key.
+            </small>
             {draft.credentialConfigured && <small>Credential currently configured. Leave unchanged to preserve it.</small>}
           </label>
           {error && (

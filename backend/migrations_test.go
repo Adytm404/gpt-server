@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,29 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestModelBaseURLMigrationBackfillsWithoutFakeEndpoint(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/006_ai_models_base_url.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{
+		"ADD COLUMN base_url text",
+		"UPDATE ai_models SET base_url = '' WHERE base_url IS NULL",
+		"ALTER COLUMN base_url SET DEFAULT ''",
+		"ALTER COLUMN base_url SET NOT NULL",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("006 migration missing %q", clause)
+		}
+	}
+	for _, forbidden := range []string{"api.openai.com", "localhost", "example.com"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("006 migration contains fake endpoint %q", forbidden)
+		}
 	}
 }
 

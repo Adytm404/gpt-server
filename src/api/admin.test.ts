@@ -1,13 +1,13 @@
 import { adminApi, modelFromDTO, modelToInput, planFromDTO, planToInput } from './admin'
 
-const modelResponse = { id: 'model-uuid', model_id: 'backend-model', name: 'Backend Model', provider: 'Provider', context_window: 32000, status: 'active' as const, fallback: false }
+const modelResponse = { id: 'model-uuid', model_id: 'backend-model', name: 'Backend Model', provider: 'Provider', context_window: 32000, base_url: 'https://api.example.com/v1', status: 'active' as const, fallback: false }
 const planResponse = { id: 'plan-uuid', name: 'Control', slug: 'control', description: 'Teams', price_cents: 5900, annual_price_cents: 4700, status: 'published' as const, max_workspaces: 3, max_servers: 15, monthly_tokens: 1000, input_tokens: 64, output_tokens: 16, over_limit: 'allow_with_warning' as const, default_model_id: 'a', fallback_model_id: 'b', allowed_model_ids: ['a', 'b'], features: ['Feature'], visibility: 'public' as const }
 
 describe('admin DTO mapping', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('maps snake_case model fields to UI fields', () => {
-    expect(modelFromDTO(modelResponse)).toEqual({ id: 'model-uuid', modelId: 'backend-model', name: 'Backend Model', provider: 'Provider', context: '32K', status: 'Active', fallback: false, credentialConfigured: undefined, credentialRef: undefined })
+    expect(modelFromDTO(modelResponse)).toEqual({ id: 'model-uuid', modelId: 'backend-model', name: 'Backend Model', provider: 'Provider', context: '32K', baseUrl: 'https://api.example.com/v1', status: 'Active', fallback: false, credentialConfigured: undefined, credentialRef: undefined })
   })
 
   it('round trips plan policy fields', () => {
@@ -15,14 +15,14 @@ describe('admin DTO mapping', () => {
   })
 
   it('builds model input with only backend-accepted fields', () => {
-    expect(modelToInput(modelFromDTO(modelResponse))).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000 })
+    expect(modelToInput(modelFromDTO(modelResponse))).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000, base_url: 'https://api.example.com/v1' })
   })
 
   it('posts exact model input fields and accepts direct model response', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(modelResponse), { status: 201, headers: { 'Content-Type': 'application/json' } }))
-    await adminApi.saveModel({ id: '', modelId: 'backend-model', name: 'Backend Model', provider: 'Provider', context: '32K', status: 'Active', fallback: false }, true)
+    await adminApi.saveModel({ id: '', modelId: 'backend-model', name: 'Backend Model', provider: 'Provider', context: '32K', baseUrl: 'https://api.example.com/v1', status: 'Active', fallback: false }, true)
     const [, init] = fetchMock.mock.calls[0]
-    expect(JSON.parse(String(init?.body))).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000 })
+    expect(JSON.parse(String(init?.body))).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000, base_url: 'https://api.example.com/v1' })
   })
 
   it('persists desired model status and returns refreshed model', async () => {
@@ -37,7 +37,7 @@ describe('admin DTO mapping', () => {
   })
 
   it('sends credential reference without exposing a secret field', () => {
-    expect(modelToInput({ ...modelFromDTO(modelResponse), credentialRef: ' vault://models/provider ' })).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000, credential_ref: 'vault://models/provider' })
+    expect(modelToInput({ ...modelFromDTO(modelResponse), credentialRef: ' vault://models/provider ' })).toEqual({ name: 'Backend Model', provider: 'Provider', model_id: 'backend-model', context_window: 32000, base_url: 'https://api.example.com/v1', credential_ref: 'vault://models/provider' })
   })
 
   it('deduplicates plan revisions by plan id and prefers draft', async () => {

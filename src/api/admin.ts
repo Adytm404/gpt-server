@@ -6,6 +6,7 @@ export type ModelDTO = {
   name: string
   provider: string
   context_window: number
+  base_url: string
   status: 'active' | 'disabled'
   fallback: boolean
   credential_configured?: boolean
@@ -17,6 +18,7 @@ export type ModelInput = {
   provider: string
   model_id: string
   context_window: number
+  base_url: string
   api_key?: string
   credential_ref?: string
 }
@@ -64,6 +66,7 @@ export type HistoryEvent = {
 
 export type Model = {
   id: string; modelId?: string; name: string; provider: string; context: string
+  baseUrl: string
   status: 'Active' | 'Disabled'; fallback: boolean
   credentialConfigured?: boolean; credentialRef?: string
 }
@@ -76,11 +79,11 @@ export type Plan = {
 }
 
 export function modelFromDTO(dto: ModelDTO): Model {
-  return { id: dto.id, modelId: dto.model_id, name: dto.name, provider: dto.provider, context: formatTokens(dto.context_window), status: dto.status === 'active' ? 'Active' : 'Disabled', fallback: dto.fallback, credentialConfigured: dto.credential_configured, credentialRef: dto.credential_ref }
+  return { id: dto.id, modelId: dto.model_id, name: dto.name, provider: dto.provider, context: formatTokens(dto.context_window), baseUrl: dto.base_url, status: dto.status === 'active' ? 'Active' : 'Disabled', fallback: dto.fallback, credentialConfigured: dto.credential_configured, credentialRef: dto.credential_ref }
 }
 
 export function modelToInput(model: Model): ModelInput {
-  return { name: model.name, provider: model.provider, model_id: model.modelId || '', context_window: parseTokens(model.context), ...(model.credentialRef?.trim() ? { credential_ref: model.credentialRef.trim() } : {}) }
+  return { name: model.name, provider: model.provider, model_id: model.modelId || '', context_window: parseTokens(model.context), base_url: model.baseUrl, ...(model.credentialRef?.trim() ? { credential_ref: model.credentialRef.trim() } : {}) }
 }
 
 export function planFromDTO(dto: PlanDTO): Plan {

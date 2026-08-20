@@ -42,26 +42,44 @@ func TestValidateServerInput(t *testing.T) {
 }
 
 func TestValidateModelInput(t *testing.T) {
-	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", ContextWindow: 128000}); err != nil {
-		t.Fatal(err)
+	valid := modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", ContextWindow: 128000}
+	for _, baseURL := range []string{"https://api.openai.com/v1", "http://localhost:11434/v1"} {
+		valid.BaseURL = baseURL
+		if err := validateModelInput(valid); err != nil {
+			t.Errorf("valid base_url %q rejected: %v", baseURL, err)
+		}
 	}
-	if err := validateModelInput(modelInput{Name: "", Provider: "OpenAI", ModelID: "gpt-5", ContextWindow: 1}); err == nil {
+	for _, baseURL := range []string{
+		"javascript:alert(1)",
+		"/v1",
+		"https://user:password@example.com/v1",
+		"https://example.com/v1?api=1",
+		"https://example.com/v1#models",
+		"",
+		"   ",
+	} {
+		valid.BaseURL = baseURL
+		if err := validateModelInput(valid); err == nil {
+			t.Errorf("invalid base_url %q accepted", baseURL)
+		}
+	}
+	if err := validateModelInput(modelInput{Name: "", Provider: "OpenAI", ModelID: "gpt-5", BaseURL: "https://api.openai.com/v1", ContextWindow: 1}); err == nil {
 		t.Fatal("empty name accepted")
 	}
-	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "bad model", ContextWindow: 1}); err == nil {
+	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "bad model", BaseURL: "https://api.openai.com/v1", ContextWindow: 1}); err == nil {
 		t.Fatal("invalid external model ID accepted")
 	}
-	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", ContextWindow: 1, APIKey: "secret"}); err == nil {
+	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", BaseURL: "https://api.openai.com/v1", ContextWindow: 1, APIKey: "secret"}); err == nil {
 		t.Fatal("api_key accepted without secure storage")
 	}
-	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", ContextWindow: 1, CredentialRef: "vault://models/gpt"}); err != nil {
+	if err := validateModelInput(modelInput{Name: "GPT", Provider: "OpenAI", ModelID: "gpt-5", BaseURL: "https://api.openai.com/v1", ContextWindow: 1, CredentialRef: "vault://models/gpt"}); err != nil {
 		t.Fatalf("credential_ref rejected: %v", err)
 	}
 }
 
 func TestModelCreatePayloadNeedsOnlyEditableFields(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/models", strings.NewReader(`{
-		"name":"GPT 5 mini","provider":"OpenAI","model_id":"gpt-5-mini","context_window":128000
+		"name":"GPT 5 mini","provider":"OpenAI","model_id":"gpt-5-mini","base_url":"https://api.openai.com/v1","context_window":128000
 	}`))
 	var in modelInput
 	if err := decodeJSON(req, &in); err != nil {
@@ -70,8 +88,18 @@ func TestModelCreatePayloadNeedsOnlyEditableFields(t *testing.T) {
 	if err := validateModelInput(in); err != nil {
 		t.Fatal(err)
 	}
-	if in.Name != "GPT 5 mini" || in.APIKey != "" || in.CredentialRef != "" {
+	if in.Name != "GPT 5 mini" || in.BaseURL != "https://api.openai.com/v1" || in.APIKey != "" || in.CredentialRef != "" {
 		t.Fatalf("decoded payload = %+v", in)
+	}
+}
+
+func TestModelResponseIncludesBaseURL(t *testing.T) {
+	encoded, err := json.Marshal(modelResponse{BaseURL: "http://localhost:11434/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"base_url":"http://localhost:11434/v1"`) {
+		t.Fatalf("response missing base_url: %s", encoded)
 	}
 }
 

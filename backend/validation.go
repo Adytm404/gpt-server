@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -26,6 +27,7 @@ type modelInput struct {
 	Name          string `json:"name"`
 	Provider      string `json:"provider"`
 	ModelID       string `json:"model_id"`
+	BaseURL       string `json:"base_url"`
 	ContextWindow int    `json:"context_window"`
 	APIKey        string `json:"api_key,omitempty"`
 	CredentialRef string `json:"credential_ref,omitempty"`
@@ -91,6 +93,11 @@ func validHostname(host string) bool {
 func validateModelInput(in modelInput) error {
 	if in.APIKey != "" || strings.TrimSpace(in.Name) == "" || len(in.Name) > 200 || strings.TrimSpace(in.Provider) == "" || len(in.Provider) > 100 || !safeToken.MatchString(in.ModelID) || len(in.ModelID) > 200 || in.ContextWindow < 1 || in.ContextWindow > 100000000 || len(in.CredentialRef) > 500 {
 		return errors.New("invalid model fields")
+	}
+	baseURL := strings.TrimSpace(in.BaseURL)
+	parsed, err := url.Parse(baseURL)
+	if err != nil || baseURL == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || !parsed.IsAbs() || parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(baseURL, "#") {
+		return errors.New("invalid model base URL")
 	}
 	return nil
 }

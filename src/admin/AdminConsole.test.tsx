@@ -34,7 +34,16 @@ it('starts new model form blank', async () => {
   expect(screen.getByLabelText('Model ID')).toHaveValue('')
   expect(screen.getByLabelText('Provider')).toHaveValue('')
   expect(screen.getByLabelText('Context window')).toHaveValue('')
+  expect(screen.getByLabelText('OpenAI-compatible base URL')).toHaveValue('')
   expect(screen.getByLabelText(/Credential reference/)).toHaveValue('')
+  expect(screen.getByLabelText('Display name')).toHaveAttribute('placeholder', 'GPT-4.1 Mini')
+  expect(screen.getByLabelText('Model ID')).toHaveAttribute('placeholder', 'gpt-4.1-mini')
+  expect(screen.getByLabelText('Provider')).toHaveAttribute('placeholder', 'OpenAI-compatible')
+  expect(screen.getByLabelText('Context window')).toHaveAttribute('placeholder', '128K')
+  expect(screen.getByLabelText('OpenAI-compatible base URL')).toHaveAttribute('placeholder', 'https://api.openai.com/v1')
+  expect(screen.getByLabelText(/Credential reference/)).toHaveAttribute('placeholder', 'vault://models/openai')
+  expect(screen.getByText(/endpoint must expose.*OpenAI-compatible.*\/chat\/completions/i)).toBeInTheDocument()
+  expect(screen.getByText(/points to a server-side secret and is not an API key/i)).toBeInTheDocument()
 })
 
 it('starts new plan with zero limits, no models, and no fake feature', async () => {

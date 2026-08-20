@@ -18,6 +18,7 @@ type modelResponse struct {
 	ModelID              string    `json:"model_id"`
 	Name                 string    `json:"name"`
 	Provider             string    `json:"provider"`
+	BaseURL              string    `json:"base_url"`
 	ContextWindow        int       `json:"context_window"`
 	Status               string    `json:"status"`
 	Fallback             bool      `json:"fallback"`
@@ -25,7 +26,7 @@ type modelResponse struct {
 	CredentialRef        *string   `json:"credential_ref,omitempty"`
 }
 
-const modelColumns = `id,external_model_id,name,provider,context_window,status,is_fallback,credential_configured,credential_ref`
+const modelColumns = `id,external_model_id,name,provider,base_url,context_window,status,is_fallback,credential_configured,credential_ref`
 
 func (s *server) adminRoutes(r chi.Router) {
 	r.Get("/models", s.listModels)
@@ -50,7 +51,7 @@ func (s *server) adminRoutes(r chi.Router) {
 
 func scanModel(row pgx.Row) (modelResponse, error) {
 	var m modelResponse
-	err := row.Scan(&m.ID, &m.ModelID, &m.Name, &m.Provider, &m.ContextWindow, &m.Status, &m.Fallback, &m.CredentialConfigured, &m.CredentialRef)
+	err := row.Scan(&m.ID, &m.ModelID, &m.Name, &m.Provider, &m.BaseURL, &m.ContextWindow, &m.Status, &m.Fallback, &m.CredentialConfigured, &m.CredentialRef)
 	return m, err
 }
 func (s *server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +103,7 @@ func (s *server) createModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	m, err := scanModel(tx.QueryRow(r.Context(), `INSERT INTO ai_models(id,external_model_id,name,provider,context_window,credential_configured,credential_ref) VALUES($1,$2,$3,$4,$5,$6,NULLIF($7,'')) RETURNING `+modelColumns, id, in.ModelID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Provider), in.ContextWindow, configured, ref))
+	m, err := scanModel(tx.QueryRow(r.Context(), `INSERT INTO ai_models(id,external_model_id,name,provider,base_url,context_window,credential_configured,credential_ref) VALUES($1,$2,$3,$4,$5,$6,$7,NULLIF($8,'')) RETURNING `+modelColumns, id, in.ModelID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Provider), strings.TrimSpace(in.BaseURL), in.ContextWindow, configured, ref))
 	if err == nil {
 		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "models", "Model created", id, m.Name, nil)
 	}
@@ -133,7 +134,7 @@ func (s *server) updateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	m, err := scanModel(tx.QueryRow(r.Context(), `UPDATE ai_models SET external_model_id=$2,name=$3,provider=$4,context_window=$5,credential_configured=CASE WHEN $6 THEN true ELSE credential_configured END,credential_ref=CASE WHEN $6 THEN NULLIF($7,'') ELSE credential_ref END,updated_at=now() WHERE id=$1 RETURNING `+modelColumns, id, in.ModelID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Provider), in.ContextWindow, configured, ref))
+	m, err := scanModel(tx.QueryRow(r.Context(), `UPDATE ai_models SET external_model_id=$2,name=$3,provider=$4,base_url=$5,context_window=$6,credential_configured=CASE WHEN $7 THEN true ELSE credential_configured END,credential_ref=CASE WHEN $7 THEN NULLIF($8,'') ELSE credential_ref END,updated_at=now() WHERE id=$1 RETURNING `+modelColumns, id, in.ModelID, strings.TrimSpace(in.Name), strings.TrimSpace(in.Provider), strings.TrimSpace(in.BaseURL), in.ContextWindow, configured, ref))
 	if err == nil {
 		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "models", "Model updated", id, m.Name, nil)
 	}
