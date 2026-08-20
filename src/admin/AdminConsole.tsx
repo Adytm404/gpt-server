@@ -14,7 +14,6 @@ import {
   useParams,
 } from "react-router-dom";
 import {
-  Activity,
   Archive,
   ArrowLeft,
   ArrowRight,
@@ -24,7 +23,6 @@ import {
   Copy,
   Edit3,
   Eye,
-  FlaskConical,
   Gauge,
   Layers3,
   Plus,
@@ -51,18 +49,17 @@ const emptyPlan: Plan = {
   priceCents: 0,
   annualPriceCents: 0,
   status: "Draft",
-  maxWorkspaces: 1,
-  maxServers: 3,
-  monthlyTokens: 1000000,
-  inputTokens: 32000,
-  outputTokens: 8000,
+  maxWorkspaces: 0,
+  maxServers: 0,
+  monthlyTokens: 0,
+  inputTokens: 0,
+  outputTokens: 0,
   overLimit: "Block requests",
   defaultModel: "",
   fallbackModel: "",
   allowedModels: [],
-  features: ["Approval-first execution"],
+  features: [],
   visibility: "Private",
-  subscribers: 0,
 };
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed";
@@ -204,7 +201,6 @@ function ModelsPage() {
     load,
   } = useLoad(loader, [] as Model[]);
   const [drawer, setDrawer] = useState<Model | "new" | null>(null);
-  const [testing, setTesting] = useState("");
   const [query, setQuery] = useState("");
   const filtered = models.filter((model) =>
     `${model.name} ${model.provider}`
@@ -278,7 +274,6 @@ function ModelsPage() {
             <div className="admin-table-head">
               <span>Model</span>
               <span>Context</span>
-              <span>Latency</span>
               <span>Status</span>
               <span>Routing</span>
               <span />
@@ -297,7 +292,6 @@ function ModelsPage() {
                   </span>
                 </div>
                 <span className="admin-mono">{model.context}</span>
-                <span>{model.latency}</span>
                 <Status value={model.status} />
                 <span>
                   {model.fallback ? (
@@ -307,25 +301,6 @@ function ModelsPage() {
                   )}
                 </span>
                 <div className="admin-row-actions">
-                  <button
-                    title="Test model"
-                    disabled={testing === model.id}
-                    onClick={() => {
-                      setTesting(model.id);
-                      void action(async () => {
-                        const result = await adminApi.testModel(model.id);
-                        notify(
-                          `${model.name} responded in ${result.latency_ms}ms`,
-                        );
-                      }, "").finally(() => setTesting(""));
-                    }}
-                  >
-                    {testing === model.id ? (
-                      <span className="tiny-spinner" />
-                    ) : (
-                      <FlaskConical size={14} />
-                    )}
-                  </button>
                   <button
                     title="Set fallback"
                     disabled={model.status === "Disabled"}
@@ -396,11 +371,10 @@ function ModelDrawer({
       id: "",
       modelId: "",
       name: "",
-      provider: "OpenAI",
-      context: "128K",
+      provider: "",
+      context: "",
       status: "Active",
       fallback: false,
-      latency: "-",
       credentialConfigured: false,
       credentialRef: "",
     },
@@ -564,10 +538,10 @@ function PlansPage() {
             icon: Edit3,
           },
           {
-            label: "Subscribers",
-            value: plans.reduce((sum, x) => sum + x.subscribers, 0),
-            detail: "Active workspaces",
-            icon: Activity,
+            label: "Archived",
+            value: plans.filter((x) => x.status === "Archived").length,
+            detail: "Retired catalog plans",
+            icon: Archive,
           },
         ]}
       />
@@ -584,7 +558,6 @@ function PlansPage() {
               <span>Plan</span>
               <span>Price</span>
               <span>Capacity</span>
-              <span>Subscribers</span>
               <span>Status</span>
               <span />
             </div>
@@ -609,7 +582,6 @@ function PlansPage() {
                   <b>{plan.maxServers}</b>
                   <small> servers / workspace</small>
                 </span>
-                <span>{plan.subscribers}</span>
                 <Status value={plan.status} />
                 <div className="admin-row-actions">
                   <button

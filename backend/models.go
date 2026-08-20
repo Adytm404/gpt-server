@@ -23,10 +23,9 @@ type modelResponse struct {
 	Fallback             bool      `json:"fallback"`
 	CredentialConfigured bool      `json:"credential_configured"`
 	CredentialRef        *string   `json:"credential_ref,omitempty"`
-	LastTestLatencyMS    *int      `json:"last_test_latency_ms,omitempty"`
 }
 
-const modelColumns = `id,external_model_id,name,provider,context_window,status,is_fallback,credential_configured,credential_ref,last_test_latency_ms`
+const modelColumns = `id,external_model_id,name,provider,context_window,status,is_fallback,credential_configured,credential_ref`
 
 func (s *server) adminRoutes(r chi.Router) {
 	r.Get("/models", s.listModels)
@@ -34,7 +33,6 @@ func (s *server) adminRoutes(r chi.Router) {
 	r.Get("/models/{id}", s.getModel)
 	r.With(s.requireMutation).Patch("/models/{id}", s.updateModel)
 	r.With(s.requireMutation).Delete("/models/{id}", s.deleteModel)
-	r.With(s.requireMutation).Post("/models/{id}/test", s.testModel)
 	r.With(s.requireMutation).Post("/models/{id}/fallback", s.fallbackModel)
 	r.With(s.requireMutation).Post("/models/{id}/enable", s.setModelEnabled(true))
 	r.With(s.requireMutation).Post("/models/{id}/disable", s.setModelEnabled(false))
@@ -52,7 +50,7 @@ func (s *server) adminRoutes(r chi.Router) {
 
 func scanModel(row pgx.Row) (modelResponse, error) {
 	var m modelResponse
-	err := row.Scan(&m.ID, &m.ModelID, &m.Name, &m.Provider, &m.ContextWindow, &m.Status, &m.Fallback, &m.CredentialConfigured, &m.CredentialRef, &m.LastTestLatencyMS)
+	err := row.Scan(&m.ID, &m.ModelID, &m.Name, &m.Provider, &m.ContextWindow, &m.Status, &m.Fallback, &m.CredentialConfigured, &m.CredentialRef)
 	return m, err
 }
 func (s *server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -181,32 +179,6 @@ func (s *server) deleteModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(204)
-}
-func (s *server) testModel(w http.ResponseWriter, r *http.Request) {
-	id, ok := s.pathUUID(w, r)
-	if !ok {
-		return
-	}
-	latency := 75 + int(id[15])%226
-	tx, err := s.db.Begin(r.Context())
-	if err != nil {
-		s.dbError(w, r, err)
-		return
-	}
-	defer tx.Rollback(r.Context())
-	var name string
-	err = tx.QueryRow(r.Context(), `UPDATE ai_models SET last_test_latency_ms=$2,updated_at=now() WHERE id=$1 RETURNING name`, id, latency).Scan(&name)
-	if err == nil {
-		err = insertAudit(r.Context(), tx, authFrom(r.Context()).UserID, "models", "Model test completed", id, name, map[string]any{"latency_ms": latency})
-	}
-	if err == nil {
-		err = tx.Commit(r.Context())
-	}
-	if err != nil {
-		s.dbError(w, r, err)
-		return
-	}
-	s.writeJSON(w, 200, map[string]any{"status": "ok", "latency_ms": latency, "stub": true})
 }
 func (s *server) fallbackModel(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.pathUUID(w, r)

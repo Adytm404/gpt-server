@@ -75,6 +75,44 @@ func TestModelCreatePayloadNeedsOnlyEditableFields(t *testing.T) {
 	}
 }
 
+func TestLegacySyntheticFieldsAreNotSerialized(t *testing.T) {
+	modelJSON, err := json.Marshal(modelResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planJSON, err := json.Marshal(planResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for field, encoded := range map[string][]byte{
+		"last_test_latency_ms": modelJSON,
+		"subscribers":          planJSON,
+	} {
+		if strings.Contains(string(encoded), field) {
+			t.Errorf("response exposes legacy field %q: %s", field, encoded)
+		}
+	}
+}
+
+func TestModelTestRouteIsUnavailable(t *testing.T) {
+	s := &server{cfg: config{frontendOrigin: "https://app.example.com"}, resolveSession: func(context.Context, string) (sessionAuth, error) {
+		return sessionAuth{UserID: uuid.New(), WorkspaceID: uuid.New(), PlatformRole: "admin", WorkspaceRole: "owner"}, nil
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/models/10000000-0000-4000-8000-000000000001/test", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("X-CSRF-Token", "token")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: "opaque"})
+	req.AddCookie(&http.Cookie{Name: csrfCookie, Value: "token"})
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("model test route status = %d, want 404 or 405; body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"stub"`) {
+		t.Fatalf("model test response retains stub field: %s", rec.Body.String())
+	}
+}
+
 func TestValidatePlanInput(t *testing.T) {
 	a, b := uuid.New(), uuid.New()
 	valid := planRevisionInput{Name: "Control", Slug: "control", PriceCents: 5900, AnnualPriceCents: 4700, MaxWorkspaces: 3, MaxServers: 15, MonthlyTokens: 1000, InputTokens: 100, OutputTokens: 50, OverLimit: "allow_with_warning", Visibility: "public", AllowedModelIDs: []uuid.UUID{a, b}, DefaultModelID: a, FallbackModelID: b}

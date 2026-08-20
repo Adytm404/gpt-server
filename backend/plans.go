@@ -33,15 +33,14 @@ type planResponse struct {
 	AllowedModelIDs  []uuid.UUID `json:"allowed_model_ids"`
 	Features         []string    `json:"features"`
 	Visibility       string      `json:"visibility"`
-	Subscribers      int         `json:"subscribers"`
 }
 
-const planSelect = `SELECT p.plan_id,p.id,p.revision,p.name,p.slug,p.description,p.price_cents,p.annual_price_cents,p.status,p.max_workspaces,p.max_servers,p.monthly_tokens,p.input_tokens,p.output_tokens,p.over_limit,p.default_model_id,p.fallback_model_id,COALESCE((SELECT array_agg(model_id ORDER BY model_id) FROM plan_allowed_models WHERE revision_id=p.id),'{}'),p.features,p.visibility,p.subscribers FROM subscription_plan_revisions p`
+const planSelect = `SELECT p.plan_id,p.id,p.revision,p.name,p.slug,p.description,p.price_cents,p.annual_price_cents,p.status,p.max_workspaces,p.max_servers,p.monthly_tokens,p.input_tokens,p.output_tokens,p.over_limit,p.default_model_id,p.fallback_model_id,COALESCE((SELECT array_agg(model_id ORDER BY model_id) FROM plan_allowed_models WHERE revision_id=p.id),'{}'),p.features,p.visibility FROM subscription_plan_revisions p`
 
 func scanPlan(row pgx.Row) (planResponse, error) {
 	var p planResponse
 	var features []byte
-	err := row.Scan(&p.ID, &p.RevisionID, &p.Revision, &p.Name, &p.Slug, &p.Description, &p.PriceCents, &p.AnnualPriceCents, &p.Status, &p.MaxWorkspaces, &p.MaxServers, &p.MonthlyTokens, &p.InputTokens, &p.OutputTokens, &p.OverLimit, &p.DefaultModelID, &p.FallbackModelID, &p.AllowedModelIDs, &features, &p.Visibility, &p.Subscribers)
+	err := row.Scan(&p.ID, &p.RevisionID, &p.Revision, &p.Name, &p.Slug, &p.Description, &p.PriceCents, &p.AnnualPriceCents, &p.Status, &p.MaxWorkspaces, &p.MaxServers, &p.MonthlyTokens, &p.InputTokens, &p.OutputTokens, &p.OverLimit, &p.DefaultModelID, &p.FallbackModelID, &p.AllowedModelIDs, &features, &p.Visibility)
 	if err == nil {
 		err = json.Unmarshal(features, &p.Features)
 	}
@@ -136,7 +135,7 @@ func (s *server) createPlanDraft(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRow(r.Context(), `SELECT id,revision+1,name FROM subscription_plan_revisions WHERE plan_id=$1 AND status='published' FOR UPDATE`, id).Scan(&revID, &revision, &name)
 	if err == nil {
 		newID := uuid.New()
-		err = tx.QueryRow(r.Context(), `INSERT INTO subscription_plan_revisions(id,plan_id,revision,name,slug,description,price_cents,annual_price_cents,status,max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility,subscribers) SELECT $1,plan_id,$2,name,slug,description,price_cents,annual_price_cents,'draft',max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility,subscribers FROM subscription_plan_revisions WHERE id=$3 RETURNING name`, newID, revision, revID).Scan(&name)
+		err = tx.QueryRow(r.Context(), `INSERT INTO subscription_plan_revisions(id,plan_id,revision,name,slug,description,price_cents,annual_price_cents,status,max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility) SELECT $1,plan_id,$2,name,slug,description,price_cents,annual_price_cents,'draft',max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility FROM subscription_plan_revisions WHERE id=$3 RETURNING name`, newID, revision, revID).Scan(&name)
 		if err == nil {
 			_, err = tx.Exec(r.Context(), `INSERT INTO plan_allowed_models(revision_id,model_id) SELECT $1,model_id FROM plan_allowed_models WHERE revision_id=$2`, newID, revID)
 		}

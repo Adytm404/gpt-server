@@ -85,23 +85,26 @@ func TestIntegrationDraftSlugAndPublishedModelDependency(t *testing.T) {
 	}
 	defer tx.Rollback(ctx)
 
-	planID := uuid.MustParse("20000000-0000-4000-8000-000000000001")
-	var publishedID, draftID uuid.UUID
-	var revision int
-	if err = tx.QueryRow(ctx, `SELECT id,revision+1 FROM subscription_plan_revisions WHERE plan_id=$1 AND status='published' FOR UPDATE`, planID).Scan(&publishedID, &revision); err != nil {
+	modelID, planID, publishedID := uuid.New(), uuid.New(), uuid.New()
+	if _, err = tx.Exec(ctx, `INSERT INTO ai_models(id,external_model_id,name,provider,context_window) VALUES($1,$2,'Integration Model','test',1024)`, modelID, "integration-"+modelID.String()); err != nil {
 		t.Fatal(err)
 	}
-	draftID = uuid.New()
-	if _, err = tx.Exec(ctx, `INSERT INTO subscription_plan_revisions(id,plan_id,revision,name,slug,description,price_cents,annual_price_cents,status,max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility,subscribers) SELECT $1,plan_id,$2,name,slug,description,price_cents,annual_price_cents,'draft',max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility,subscribers FROM subscription_plan_revisions WHERE id=$3`, draftID, revision, publishedID); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO subscription_plans(id,slug) VALUES($1,$2)`, planID, "integration-"+planID.String()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO subscription_plan_revisions(id,plan_id,revision,name,slug,description,price_cents,annual_price_cents,status,max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility) VALUES($1,$2,1,'Integration','integration','',0,0,'published',1,1,1000,100,100,'block_requests',$3,$3,'[]','private')`, publishedID, planID, modelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO plan_allowed_models(revision_id,model_id) VALUES($1,$2)`, publishedID, modelID); err != nil {
+		t.Fatal(err)
+	}
+	draftID := uuid.New()
+	if _, err = tx.Exec(ctx, `INSERT INTO subscription_plan_revisions(id,plan_id,revision,name,slug,description,price_cents,annual_price_cents,status,max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility) SELECT $1,plan_id,revision+1,name,slug,description,price_cents,annual_price_cents,'draft',max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility FROM subscription_plan_revisions WHERE id=$2`, draftID, publishedID); err != nil {
 		t.Fatalf("draft with same logical slug: %v", err)
 	}
 	var effectiveCount int
 	if err = tx.QueryRow(ctx, `SELECT count(*) FROM (SELECT DISTINCT ON (plan_id) id FROM subscription_plan_revisions WHERE plan_id=$1 AND status IN ('draft','published') ORDER BY plan_id,(status='draft') DESC) effective`, planID).Scan(&effectiveCount); err != nil || effectiveCount != 1 {
 		t.Fatalf("effective plans count=%d err=%v", effectiveCount, err)
-	}
-	var modelID uuid.UUID
-	if err = tx.QueryRow(ctx, `SELECT id FROM ai_models WHERE external_model_id='gpt-5-mini'`).Scan(&modelID); err != nil {
-		t.Fatal(err)
 	}
 	var used bool
 	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM subscription_plan_revisions p LEFT JOIN plan_allowed_models pam ON pam.revision_id=p.id WHERE p.status='published' AND (p.default_model_id=$1 OR p.fallback_model_id=$1 OR pam.model_id=$1))`, modelID).Scan(&used); err != nil || !used {

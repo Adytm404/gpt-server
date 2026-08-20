@@ -119,34 +119,3 @@ ALTER TABLE server_health_snapshots ADD COLUMN IF NOT EXISTS memory_percent nume
 ALTER TABLE server_health_snapshots ADD COLUMN IF NOT EXISTS error text NOT NULL DEFAULT '';
 ALTER TABLE server_health_snapshots ADD COLUMN IF NOT EXISTS checked_at timestamptz NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS server_health_server_idx ON server_health_snapshots(server_id, checked_at DESC);
-
-INSERT INTO ai_models (id, external_model_id, name, provider, context_window, status, is_fallback)
-SELECT * FROM (VALUES
- ('10000000-0000-4000-8000-000000000001'::uuid,'claude-sonnet','Claude 4 Sonnet','Anthropic',200000,'active',false),
- ('10000000-0000-4000-8000-000000000002'::uuid,'gpt-5-mini','GPT-5 mini','OpenAI',128000,'active',false),
- ('10000000-0000-4000-8000-000000000003'::uuid,'gemini-flash','Gemini 2.5 Flash','Google',1000000,'active',false),
- ('10000000-0000-4000-8000-000000000004'::uuid,'llama-70b','Llama 3.3 70B','Groq',128000,'disabled',false)
-) AS seed(id, external_model_id, name, provider, context_window, status, is_fallback)
-ON CONFLICT DO NOTHING;
-
-UPDATE ai_models SET is_fallback=true,updated_at=now()
-WHERE external_model_id='gpt-5-mini' AND NOT EXISTS (SELECT 1 FROM ai_models WHERE is_fallback);
-
-DO $$
-DECLARE operator_plan uuid := '20000000-0000-4000-8000-000000000001'; control_plan uuid := '20000000-0000-4000-8000-000000000002';
-DECLARE operator_rev uuid := '30000000-0000-4000-8000-000000000001'; control_rev uuid := '30000000-0000-4000-8000-000000000002';
-DECLARE claude_model uuid; gpt_model uuid; gemini_model uuid;
-BEGIN
- SELECT id INTO STRICT claude_model FROM ai_models WHERE external_model_id='claude-sonnet';
- SELECT id INTO STRICT gpt_model FROM ai_models WHERE external_model_id='gpt-5-mini';
- SELECT id INTO STRICT gemini_model FROM ai_models WHERE external_model_id='gemini-flash';
- IF NOT EXISTS (SELECT 1 FROM subscription_plans) THEN
-  INSERT INTO subscription_plans(id,slug) VALUES(operator_plan,'operator'),(control_plan,'control');
-  INSERT INTO subscription_plan_revisions(id,plan_id,revision,name,slug,description,price_cents,annual_price_cents,status,max_workspaces,max_servers,monthly_tokens,input_tokens,output_tokens,over_limit,default_model_id,fallback_model_id,features,visibility,subscribers) VALUES
-  (operator_rev,operator_plan,1,'Operator','operator','Essential AI operations for focused server stacks.',1900,1500,'published',1,3,1500000,32000,8000,'block_requests',gpt_model,gemini_model,'["3 connected servers","Approval-first execution","7-day history"]','public',184),
-  (control_rev,control_plan,1,'Control','control','Shared control and deeper visibility for production teams.',5900,4700,'published',3,15,10000000,64000,16000,'allow_with_warning',claude_model,gpt_model,'["15 connected servers","Team approval policies","90-day history","Priority support"]','public',92);
-  INSERT INTO plan_allowed_models(revision_id,model_id) VALUES
-  (operator_rev,gpt_model),(operator_rev,gemini_model),
-  (control_rev,claude_model),(control_rev,gpt_model),(control_rev,gemini_model);
- END IF;
-END $$;

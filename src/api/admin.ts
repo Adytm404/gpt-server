@@ -8,7 +8,6 @@ export type ModelDTO = {
   context_window: number
   status: 'active' | 'disabled'
   fallback: boolean
-  last_test_latency_ms: number | null
   credential_configured?: boolean
   credential_ref?: string
 }
@@ -41,10 +40,9 @@ export type PlanDTO = {
   allowed_model_ids: string[]
   features: string[]
   visibility: 'public' | 'private'
-  subscribers: number
 }
 
-export type PlanInput = Omit<PlanDTO, 'id' | 'status' | 'subscribers'>
+export type PlanInput = Omit<PlanDTO, 'id' | 'status'>
 
 export type HistoryEventDTO = {
   id: string
@@ -66,7 +64,7 @@ export type HistoryEvent = {
 
 export type Model = {
   id: string; modelId?: string; name: string; provider: string; context: string
-  status: 'Active' | 'Disabled'; fallback: boolean; latency: string
+  status: 'Active' | 'Disabled'; fallback: boolean
   credentialConfigured?: boolean; credentialRef?: string
 }
 
@@ -74,11 +72,11 @@ export type Plan = {
   id: string; name: string; slug: string; description: string; priceCents: number; annualPriceCents: number
   status: 'Draft' | 'Published' | 'Archived'; maxWorkspaces: number; maxServers: number; monthlyTokens: number
   inputTokens: number; outputTokens: number; overLimit: 'Block requests' | 'Allow with warning'; defaultModel: string
-  fallbackModel: string; allowedModels: string[]; features: string[]; visibility: 'Public' | 'Private'; subscribers: number
+  fallbackModel: string; allowedModels: string[]; features: string[]; visibility: 'Public' | 'Private'
 }
 
 export function modelFromDTO(dto: ModelDTO): Model {
-  return { id: dto.id, modelId: dto.model_id, name: dto.name, provider: dto.provider, context: formatTokens(dto.context_window), status: dto.status === 'active' ? 'Active' : 'Disabled', fallback: dto.fallback, latency: dto.last_test_latency_ms == null ? '-' : `${dto.last_test_latency_ms}ms`, credentialConfigured: dto.credential_configured, credentialRef: dto.credential_ref }
+  return { id: dto.id, modelId: dto.model_id, name: dto.name, provider: dto.provider, context: formatTokens(dto.context_window), status: dto.status === 'active' ? 'Active' : 'Disabled', fallback: dto.fallback, credentialConfigured: dto.credential_configured, credentialRef: dto.credential_ref }
 }
 
 export function modelToInput(model: Model): ModelInput {
@@ -86,7 +84,7 @@ export function modelToInput(model: Model): ModelInput {
 }
 
 export function planFromDTO(dto: PlanDTO): Plan {
-  return { id: dto.id, name: dto.name, slug: dto.slug, description: dto.description, priceCents: dto.price_cents, annualPriceCents: dto.annual_price_cents, status: title(dto.status) as Plan['status'], maxWorkspaces: dto.max_workspaces, maxServers: dto.max_servers, monthlyTokens: dto.monthly_tokens, inputTokens: dto.input_tokens, outputTokens: dto.output_tokens, overLimit: dto.over_limit === 'block_requests' ? 'Block requests' : 'Allow with warning', defaultModel: dto.default_model_id, fallbackModel: dto.fallback_model_id, allowedModels: dto.allowed_model_ids, features: dto.features, visibility: title(dto.visibility) as Plan['visibility'], subscribers: dto.subscribers }
+  return { id: dto.id, name: dto.name, slug: dto.slug, description: dto.description, priceCents: dto.price_cents, annualPriceCents: dto.annual_price_cents, status: title(dto.status) as Plan['status'], maxWorkspaces: dto.max_workspaces, maxServers: dto.max_servers, monthlyTokens: dto.monthly_tokens, inputTokens: dto.input_tokens, outputTokens: dto.output_tokens, overLimit: dto.over_limit === 'block_requests' ? 'Block requests' : 'Allow with warning', defaultModel: dto.default_model_id, fallbackModel: dto.fallback_model_id, allowedModels: dto.allowed_model_ids, features: dto.features, visibility: title(dto.visibility) as Plan['visibility'] }
 }
 
 export function planToInput(plan: Plan): PlanInput {
@@ -109,7 +107,6 @@ export const adminApi = {
     }
     return saved
   },
-  async testModel(id: string) { return apiRequest<{ latency_ms: number }>(`/api/v1/admin/models/${encodeURIComponent(id)}/test`, { method: 'POST' }) },
   async setFallback(id: string) { return apiRequest<void>(`/api/v1/admin/models/${encodeURIComponent(id)}/fallback`, { method: 'POST' }) },
   async setModelStatus(id: string, status: ModelDTO['status']) { return apiRequest<void>(`/api/v1/admin/models/${encodeURIComponent(id)}/${status === 'active' ? 'enable' : 'disable'}`, { method: 'POST' }) },
   async listPlans() {

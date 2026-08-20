@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -47,7 +47,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 }
 
-func TestCatalogMigrationUsesCanonicalPlanSlugAndIndependentModelSeeds(t *testing.T) {
+func TestCatalogMigrationUsesCanonicalPlanSlugWithoutSeeds(t *testing.T) {
 	raw, err := migrationFiles.ReadFile("migrations/002_catalog_servers.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -57,15 +57,58 @@ func TestCatalogMigrationUsesCanonicalPlanSlugAndIndependentModelSeeds(t *testin
 		"subscription_plans ADD COLUMN IF NOT EXISTS slug",
 		"subscription_plans_slug_idx",
 		"DROP INDEX IF EXISTS plan_live_slug_idx",
-		"ON CONFLICT DO NOTHING",
 		"ALTER TABLE ai_models ADD COLUMN IF NOT EXISTS credential_configured",
 	} {
 		if !strings.Contains(content, clause) {
 			t.Errorf("002 migration missing %q", clause)
 		}
 	}
-	if strings.Contains(content, "WHERE NOT EXISTS (SELECT 1 FROM ai_models)") {
-		t.Fatal("model seeds still depend on empty table")
+	for _, forbidden := range []string{
+		"Claude 4 Sonnet",
+		"GPT-5 mini",
+		"Gemini 2.5 Flash",
+		"Llama 3.3 70B",
+		"10000000-0000-4000-8000-000000000001",
+		"INSERT INTO ai_models",
+		"INSERT INTO subscription_plans",
+		"INSERT INTO subscription_plan_revisions",
+		"INSERT INTO plan_allowed_models",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("002 migration retains catalog seed %q", forbidden)
+		}
+	}
+}
+
+func TestDummyCatalogCleanupUsesOnlyExactSeedIDs(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/005_remove_dummy_catalog.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, id := range []string{
+		"10000000-0000-4000-8000-000000000001",
+		"10000000-0000-4000-8000-000000000002",
+		"10000000-0000-4000-8000-000000000003",
+		"10000000-0000-4000-8000-000000000004",
+		"20000000-0000-4000-8000-000000000001",
+		"20000000-0000-4000-8000-000000000002",
+		"30000000-0000-4000-8000-000000000001",
+		"30000000-0000-4000-8000-000000000002",
+	} {
+		if !strings.Contains(content, id) {
+			t.Errorf("005 migration missing seed ID %s", id)
+		}
+	}
+	for _, forbidden := range []string{"external_model_id=", "external_model_id =", "name=", "name =", "slug=", "slug =", "ILIKE"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("005 migration uses broad catalog match %q", forbidden)
+		}
+	}
+	for _, clause := range []string{"DELETE FROM plan_allowed_models", "DELETE FROM subscription_plan_revisions", "DELETE FROM subscription_plans", "DELETE FROM audit_events", "RAISE EXCEPTION"} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("005 migration missing %q", clause)
+		}
 	}
 }
 
