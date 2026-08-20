@@ -910,33 +910,38 @@ function PlanEditor() {
           <EditorSection
             number="02"
             title="Capacity & token policy"
-            copy="Hard workspace limits consumed by application policy."
+            copy="Hard workspace limits consumed by application policy. Starter recommendations are shown below; values remain unchanged until you enter them."
           >
             <div className="admin-form grid three">
               <NumberField
                 label="Max workspaces"
                 value={draft.maxWorkspaces}
                 update={(v) => setNumber("maxWorkspaces", v)}
+                hint="Recommended starter: 1 workspace per account"
               />
               <NumberField
                 label="Servers / workspace"
                 value={draft.maxServers}
                 update={(v) => setNumber("maxServers", v)}
+                hint="Recommended starter: 3 servers per workspace"
               />
               <NumberField
                 label="Monthly tokens"
                 value={draft.monthlyTokens}
                 update={(v) => setNumber("monthlyTokens", v)}
+                hint="Recommended starter: 1,000,000 tokens per workspace"
               />
               <NumberField
                 label="Max input"
                 value={draft.inputTokens}
                 update={(v) => setNumber("inputTokens", v)}
+                hint="Recommended starter: 32,000; keep within model context"
               />
               <NumberField
                 label="Max output"
                 value={draft.outputTokens}
                 update={(v) => setNumber("outputTokens", v)}
+                hint="Recommended starter: 8,000; keep within model output limit"
               />
               <label>
                 <span>Over-limit behavior</span>
@@ -952,6 +957,9 @@ function PlanEditor() {
                   <option>Block requests</option>
                   <option>Allow with warning</option>
                 </select>
+                <small className="field-recommendation">
+                  Recommended starter: Block requests to prevent unexpected usage.
+                </small>
               </label>
             </div>
           </EditorSection>
@@ -1084,21 +1092,25 @@ function NumberField({
   label,
   value,
   update,
+  hint,
 }: {
   label: string;
   value: number;
   update: (value: string) => void;
+  hint?: string;
 }) {
   return (
     <label>
       <span>{label}</span>
       <input
+        aria-label={label}
         type="number"
         min="0"
         step="1"
         value={value}
         onChange={(e) => update(e.target.value)}
       />
+      {hint && <small className="field-recommendation">{hint}</small>}
     </label>
   );
 }

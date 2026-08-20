@@ -109,6 +109,20 @@ it('starts new plan with zero limits, no models, and no fake feature', async () 
   expect(screen.queryByText(/GPT|Claude|OpenAI|Approval-first execution/i)).not.toBeInTheDocument()
 })
 
+it('shows starter recommendations without changing plan values', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ models: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+  render(<MemoryRouter initialEntries={['/plans/new']}><AdminConsole /></MemoryRouter>)
+  await screen.findByRole('heading', { name: 'Create plan' })
+  expect(screen.getByText('Recommended starter: 1 workspace per account')).toBeInTheDocument()
+  expect(screen.getByText('Recommended starter: 3 servers per workspace')).toBeInTheDocument()
+  expect(screen.getByText('Recommended starter: 1,000,000 tokens per workspace')).toBeInTheDocument()
+  expect(screen.getByText(/Recommended starter: 32,000; keep within model context/)).toBeInTheDocument()
+  expect(screen.getByText(/Recommended starter: 8,000; keep within model output limit/)).toBeInTheDocument()
+  expect(screen.getByText(/Recommended starter: Block requests/)).toBeInTheDocument()
+  expect(screen.getByLabelText('Max workspaces')).toHaveValue(0)
+  expect(screen.getByLabelText('Monthly tokens')).toHaveValue(0)
+})
+
 const plan = { id: 'plan-1', name: 'Private Plan', slug: 'private-plan', description: 'Private', price_cents: 5999, annual_price_cents: 4799, status: 'draft', max_workspaces: 1, max_servers: 3, monthly_tokens: 100, input_tokens: 10, output_tokens: 5, over_limit: 'block_requests', default_model_id: 'model-1', fallback_model_id: 'model-1', allowed_model_ids: ['model-1'], features: ['Feature'], visibility: 'private' }
 const model = { id: 'model-1', model_id: 'backend-model', name: 'Backend Model', provider: 'Provider', context_window: 32000, status: 'active', fallback: false }
 
