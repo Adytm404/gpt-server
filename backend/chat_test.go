@@ -31,7 +31,7 @@ func TestPromptGuard(t *testing.T) {
 }
 
 func TestLocalGreetingIntent(t *testing.T) {
-	for _, prompt := range []string{"halo", "Hai!", "hello", "hi", "halo OpsAI", "bantuan", "apa yang bisa kamu lakukan?"} {
+	for _, prompt := range []string{"halo", "Hai!", "hello", "hi", "halo OpsAI", "bantuan", "apa yang bisa kamu lakukan?", "testing chat"} {
 		response, ok := localChatResponse(prompt)
 		if !ok || !strings.Contains(response, "server yang dipilih") {
 			t.Errorf("safe greeting %q not handled: ok=%v response=%q", prompt, ok, response)

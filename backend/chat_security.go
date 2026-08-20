@@ -56,7 +56,7 @@ func localChatResponse(content string) (string, bool) {
 	normalized := strings.ToLower(strings.TrimSpace(content))
 	normalized = strings.Trim(normalized, "!.,? ")
 	switch normalized {
-	case "halo", "hai", "hello", "hi", "hey", "halo opsai", "hai opsai", "help", "bantuan", "bantu saya", "apa yang bisa kamu lakukan", "what can you do":
+	case "halo", "hai", "hello", "hi", "hey", "halo opsai", "hai opsai", "help", "bantuan", "bantu saya", "apa yang bisa kamu lakukan", "what can you do", "test", "testing", "testing chat", "tes", "tes chat":
 		return "Halo! Saya siap membantu memeriksa kesehatan, resource, service, container, dan status server yang dipilih. Jelaskan pemeriksaan server yang ingin dilakukan.", true
 	default:
 		return "", false
