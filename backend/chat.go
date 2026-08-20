@@ -363,17 +363,25 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 		Policy  string `json:"policy"`
 	}
-	if decodeJSON(r, &in) != nil || validateChatPrompt(in.Content) != nil || in.Policy != "approval_required" {
+	if decodeJSON(r, &in) != nil || validateChatContent(in.Content) != nil || in.Policy != "approval_required" {
 		s.writeError(w, r, 422, "request is outside permitted server management scope")
 		return
 	}
 	a := authFrom(r.Context())
-	if !s.planningLimiter.allow(planningRateKey(a.UserID, a.WorkspaceID), time.Now()) {
-		s.writeError(w, r, 429, "too many planning requests")
-		return
-	}
 	threadID, ok := s.pathUUID(w, r)
 	if !ok {
+		return
+	}
+	if response, local := localChatResponse(in.Content); local {
+		s.createLocalChatMessage(w, r, threadID, a.WorkspaceID, in.Content, response)
+		return
+	}
+	if validateChatPrompt(in.Content) != nil {
+		s.writeError(w, r, 422, "request is outside permitted server management scope")
+		return
+	}
+	if !s.planningLimiter.allow(planningRateKey(a.UserID, a.WorkspaceID), time.Now()) {
+		s.writeError(w, r, 429, "too many planning requests")
 		return
 	}
 	var serverID uuid.UUID
@@ -527,6 +535,34 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, 201, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: assistantContent, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": op})
+}
+
+func (s *server) createLocalChatMessage(w http.ResponseWriter, r *http.Request, threadID, workspaceID uuid.UUID, content, response string) {
+	userID, assistantID := uuid.New(), uuid.New()
+	tx, err := s.db.Begin(r.Context())
+	if err == nil {
+		var exists bool
+		err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM chat_threads WHERE id=$1 AND workspace_id=$2 AND status='active')`, threadID, workspaceID).Scan(&exists)
+		if err == nil && !exists {
+			err = pgx.ErrNoRows
+		}
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3),($4,$2,'assistant',$5)`, userID, threadID, content, assistantID, response)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET updated_at=now() WHERE id=$1 AND workspace_id=$2`, threadID, workspaceID)
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	} else if tx != nil {
+		_ = tx.Rollback(r.Context())
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: response}, "operation": nil})
 }
 
 func (s *server) failPlanning(id uuid.UUID, message string) {

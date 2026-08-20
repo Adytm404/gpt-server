@@ -30,8 +30,8 @@ var (
 )
 
 func validateChatPrompt(content string) error {
-	if content != strings.TrimSpace(content) || content == "" || len([]rune(content)) > maxChatContent || strings.ContainsAny(content, "\x00\r") {
-		return errors.New("invalid chat content")
+	if err := validateChatContent(content); err != nil {
+		return err
 	}
 	if deniedPromptPattern.MatchString(content) || hostLikePattern.MatchString(content) {
 		return errors.New("request is outside permitted server management scope")
@@ -40,6 +40,27 @@ func validateChatPrompt(content string) error {
 		return errors.New("request is outside permitted server management scope")
 	}
 	return nil
+}
+
+func validateChatContent(content string) error {
+	if content != strings.TrimSpace(content) || content == "" || len([]rune(content)) > maxChatContent || strings.ContainsAny(content, "\x00\r") {
+		return errors.New("invalid chat content")
+	}
+	return nil
+}
+
+func localChatResponse(content string) (string, bool) {
+	if validateChatContent(content) != nil {
+		return "", false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(content))
+	normalized = strings.Trim(normalized, "!.,? ")
+	switch normalized {
+	case "halo", "hai", "hello", "hi", "hey", "halo opsai", "hai opsai", "help", "bantuan", "bantu saya", "apa yang bisa kamu lakukan", "what can you do":
+		return "Halo! Saya siap membantu memeriksa kesehatan, resource, service, container, dan status server yang dipilih. Jelaskan pemeriksaan server yang ingin dilakukan.", true
+	default:
+		return "", false
+	}
 }
 
 type planStep struct {
