@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import {
   Activity, Archive, ArrowLeft, ArrowRight, Bot, Check, CheckCircle2, CircleDollarSign,
-  Clock3, Copy, Edit3, Eye, FileClock, FlaskConical, Gauge, Layers3, MoreHorizontal,
+  Clock3, Copy, Edit3, Eye, FlaskConical, Gauge, Layers3, MoreHorizontal,
   Plus, Save, Search, Send, ShieldCheck, Sparkles, X,
 } from 'lucide-react'
 import { historyEvents, initialModels, initialPlans, type Model, type Plan } from './adminData'
@@ -15,7 +15,6 @@ export default function AdminConsole() {
   const [plans, setPlans] = useState(initialPlans)
   const notify = (message: string) => window.dispatchEvent(new CustomEvent<string>('opsai:toast', { detail: message }))
   return <div className="admin-console page-enter">
-    <AdminNav />
     <Routes>
       <Route index element={<Navigate to="models" replace />} />
       <Route path="models" element={<ModelsPage models={models} setModels={setModels} notify={notify} />} />
@@ -27,10 +26,6 @@ export default function AdminConsole() {
       <Route path="*" element={<Navigate to="models" replace />} />
     </Routes>
   </div>
-}
-
-function AdminNav() {
-  return <div className="admin-subnav"><span><ShieldCheck size={14} /> Platform control</span><nav><NavLink to="/admin/models"><Bot size={14} /> Models</NavLink><NavLink to="/admin/plans"><Layers3 size={14} /> Plans</NavLink><NavLink to="/admin/history"><FileClock size={14} /> History</NavLink></nav></div>
 }
 
 function PageHead({ eyebrow, title, copy, action }: { eyebrow: string; title: string; copy: string; action?: React.ReactNode }) {

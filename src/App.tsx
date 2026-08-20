@@ -5,7 +5,7 @@ import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, Bell, Bot, Boxes, Check, CheckCircle2,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Command, Copy, Cpu, Database, Download,
   Eye, EyeOff, FileCode2, Gauge, HardDrive, History, KeyRound, LayoutGrid, ListFilter, LockKeyhole, Mail, MemoryStick,
-  LogOut, Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
+  FileClock, Layers3, LogOut, Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
   Settings, ShieldCheck, Sparkles, Square, Terminal, UserRound, X, Zap,
 } from 'lucide-react'
 import { executionLogs, servers, type Server } from './data'
@@ -99,6 +99,7 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
   const location = useLocation()
   const { session } = useSession()
   const [loggingOut, setLoggingOut] = useState(false)
+  const adminMode = location.pathname.startsWith('/admin')
   const initials = session?.user.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase() || 'U'
   const logout = async () => {
     setLoggingOut(true)
@@ -112,6 +113,24 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       setLoggingOut(false)
     }
   }
+  if (adminMode) return <>
+    <aside className={cn('sidebar admin-sidebar', open && 'is-open', expanded && 'expanded')}>
+      <div className="sidebar-top"><BrandMark /><strong>Platform admin</strong><button className="sidebar-toggle" onClick={toggle} aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}>{expanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</button></div>
+      <div className="admin-sidebar-label"><span>Platform control</span><small>Global configuration</small></div>
+      <nav className="nav-stack" aria-label="Platform administration">
+        <NavLink to="/admin/models" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Bot size={18} /><span className="nav-label">Models</span><span className="tooltip">Models</span></NavLink>
+        <NavLink to="/admin/plans" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Layers3 size={18} /><span className="nav-label">Plans</span><span className="tooltip">Plans</span></NavLink>
+        <NavLink to="/admin/history" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><FileClock size={18} /><span className="nav-label">Change history</span><span className="tooltip">Change history</span></NavLink>
+      </nav>
+      <div className="admin-sidebar-note"><ShieldCheck size={14} /><span><b>Platform scope</b><small>Changes affect every workspace.</small></span></div>
+      <div className="sidebar-bottom">
+        <NavLink to="/chat" className="nav-icon" onClick={close}><ArrowLeft size={18} /><span className="nav-label">Back to workspace</span><span className="tooltip">Back to workspace</span></NavLink>
+        <NavLink to="/profile" className="profile-link" aria-label="Profile"><span className="avatar">{initials}</span><span><b>{session?.user.full_name || 'Account'}</b><small>Platform administrator</small></span><ChevronRight size={14} /></NavLink>
+        <button className="nav-icon" onClick={logout} disabled={loggingOut}><LogOut size={18} /><span className="nav-label">{loggingOut ? 'Signing out...' : 'Sign out'}</span><span className="tooltip">Sign out</span></button>
+      </div>
+    </aside>
+    {open && <button className="sidebar-scrim" onClick={close} aria-label="Close menu" />}
+  </>
   return <>
     <aside className={cn('sidebar', open && 'is-open', expanded && 'expanded')}>
       <div className="sidebar-top"><BrandMark /><strong>OpsAI</strong><button className="sidebar-toggle" onClick={toggle} aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}>{expanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</button></div>
@@ -135,10 +154,11 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
 function Topbar({ menu }: { menu: () => void }) {
   const location = useLocation()
   const { session } = useSession()
+  const adminMode = location.pathname.startsWith('/admin')
   const section = location.pathname.startsWith('/admin') ? 'Platform admin' : location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
   return <header className="topbar">
-    <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button><button className="workspace-picker" onClick={() => openDemo('workspace', 'Switch workspace', 'Select where you want to operate.')}><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'} <ChevronDown size={14} /></button><span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
-    <div className="topbar-actions"><button className="icon-button mobile-hide" onClick={() => openDemo('search', 'Search workspace')} aria-label="Search"><Search size={17} /></button><button className="icon-button" onClick={() => openDemo('notifications', 'Notifications', 'Recent workspace activity.')} aria-label="Notifications"><Bell size={17} /><i className="notification-dot" /></button><NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink></div>
+    <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button>{adminMode ? <span className="workspace-picker admin-context"><ShieldCheck size={14} /> Platform control</span> : <button className="workspace-picker" onClick={() => openDemo('workspace', 'Switch workspace', 'Select where you want to operate.')}><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'} <ChevronDown size={14} /></button>}<span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
+    <div className="topbar-actions"><button className="icon-button mobile-hide" onClick={() => openDemo('search', adminMode ? 'Search platform settings' : 'Search workspace')} aria-label="Search"><Search size={17} /></button><button className="icon-button" onClick={() => openDemo('notifications', 'Notifications', adminMode ? 'Recent platform activity.' : 'Recent workspace activity.')} aria-label="Notifications"><Bell size={17} /><i className="notification-dot" /></button>{adminMode ? <NavLink to="/chat" className="button secondary compact"><ArrowLeft size={16} /> <span>Workspace</span></NavLink> : <NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink>}</div>
   </header>
 }
 

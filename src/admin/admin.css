@@ -1,9 +1,4 @@
 .admin-console { min-height: calc(100vh - 64px); background: #f8f8f6; }
-.admin-subnav { height: 49px; padding: 0 clamp(20px,4vw,64px); border-bottom: 1px solid var(--line); background: #fff; display: flex; align-items: center; justify-content: space-between; }
-.admin-subnav>span { display: flex; align-items: center; gap: 7px; color: #5d527f; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .11em; }
-.admin-subnav nav { align-self: stretch; display: flex; gap: 24px; }
-.admin-subnav a { position: relative; display: flex; align-items: center; gap: 6px; color: #7b7b83; font-size: 9px; font-weight: 600; }
-.admin-subnav a.active { color: var(--ink); }.admin-subnav a.active:after { content: ''; position: absolute; inset: auto 0 -1px; height: 2px; background: var(--accent); }
 .admin-page { width: min(1380px,100%); margin: auto; padding: 39px clamp(20px,4vw,64px) 70px; }
 .admin-head { min-height: 72px; margin-bottom: 28px; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
 .admin-head h1 { margin: 6px 0 5px; font-size: 34px; line-height: 1; letter-spacing: -.045em; font-weight: 600; }.admin-head p { margin: 0; color: var(--muted); font-size: 11px; }.head-actions { display: flex; gap: 8px; }
