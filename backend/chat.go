@@ -458,6 +458,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		s.createExplanation(w, r, conn, threadID, a, model, in.Content, route.LanguageCode, serverContext, routeUsage)
 		return
 	}
+	effectivePolicy := effectiveOperationPolicy(in.Policy, route.Intent)
 	if active {
 		s.writeError(w, r, http.StatusConflict, "thread already has an active operation")
 		return
@@ -466,7 +467,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	var msgSequence int64
 	tx, err := conn.Begin(r.Context())
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy,response_language) VALUES($1,$2,$3,$4,$5,$6,$7,'planning',$8,$9)`, opID, threadID, a.WorkspaceID, serverID, serverUpdatedAt, a.UserID, model.ID, in.Policy, route.LanguageCode)
+		_, err = tx.Exec(r.Context(), `INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy,response_language) VALUES($1,$2,$3,$4,$5,$6,$7,'planning',$8,$9)`, opID, threadID, a.WorkspaceID, serverID, serverUpdatedAt, a.UserID, model.ID, effectivePolicy, route.LanguageCode)
 	}
 	if err == nil {
 		err = tx.QueryRow(r.Context(), `INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,sequence,content) VALUES($1,$2,$3,'user','chat',nextval('chat_message_global_sequence'),$4) RETURNING sequence`, msgID, threadID, opID, in.Content).Scan(&msgSequence)
@@ -503,7 +504,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	var planErr error
 	var totalPlanUsage plannerUsage
 	for attempt := 0; attempt < 3; attempt++ {
-		plan, usage, planErr = requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, route.LanguageCode, in.Content, serverContext, in.Policy)
+		plan, usage, planErr = requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, route.LanguageCode, in.Content, serverContext, effectivePolicy)
 		totalPlanUsage.InputTokens += usage.InputTokens
 		totalPlanUsage.OutputTokens += usage.OutputTokens
 		if planErr == nil || ctx.Err() != nil {
@@ -587,7 +588,17 @@ func effectiveIntent(policy, routeIntent string) string {
 	if policy == "explain_only" && routeIntent == "server_operation" {
 		return "server_explanation"
 	}
+	if policy == "explain_only" && routeIntent == "server_mutation" {
+		return "server_explanation"
+	}
 	return routeIntent
+}
+
+func effectiveOperationPolicy(policy, routeIntent string) string {
+	if routeIntent == "server_mutation" && policy != "explain_only" {
+		return "unrestricted_approval"
+	}
+	return policy
 }
 
 func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, conn *pgxpool.Conn, threadID uuid.UUID, a sessionAuth, model resolvedPlanner, content, languageCode string, serverContext map[string]any, routeUsage plannerUsage) {

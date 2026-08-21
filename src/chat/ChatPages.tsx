@@ -15,7 +15,7 @@ const streamFinalEventTypes = new Set(['summary.completed', 'summary.failed', 'c
 const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'approval.required', 'retry.requested', 'running', 'step.started', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'summary.started', 'summary.completed', 'summary.failed', 'agent.thinking', 'flow.updated'])
 
 const policies: Array<{ value: ChatPolicy; label: string; description: string }> = [
-  { value: 'approval_required', label: 'Approval required', description: 'AI plans commands; explicit approval; SSH executes.' },
+  { value: 'approval_required', label: 'Approval required', description: 'Read-only by default. Explicit install or change requests escalate to high-risk approval.' },
   { value: 'unrestricted_approval', label: 'Full access', description: 'Arbitrary shell commands; every AI command batch requires explicit approval.' },
   { value: 'explain_only', label: 'Explain only', description: 'Analyze latest stored server context only. No commands will run.' },
 ]

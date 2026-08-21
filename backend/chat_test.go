@@ -175,7 +175,7 @@ func TestOpenAIIntentLanguageFallback(t *testing.T) {
 				content = `{"language_code":"id"}`
 				usage = map[string]int{"prompt_tokens": 4, "completion_tokens": 1}
 			case strings.Contains(system, "final policy gate"):
-				content = `{"decision":"allow","reason":"in scope"}`
+				content = `{"decision":"allow","verified_intent":"server_operation","reason":"in scope"}`
 				usage = map[string]int{"prompt_tokens": 5, "completion_tokens": 2}
 			}
 			out, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}, "usage": usage})
@@ -385,7 +385,7 @@ func TestOpenAIPlannerKeyedKeylessUsageAndFence(t *testing.T) {
 
 func TestOpenAIIntentRouterClassesKeyModesSchemaAndRedaction(t *testing.T) {
 	for _, key := range []string{"", "secret"} {
-		for _, intent := range []string{"conversation", "server_explanation", "server_operation", "reject"} {
+		for _, intent := range []string{"conversation", "server_explanation", "server_operation", "server_mutation", "reject"} {
 			t.Run("key="+key+"/intent="+intent, func(t *testing.T) {
 				calls := 0
 				provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -401,7 +401,7 @@ func TestOpenAIIntentRouterClassesKeyModesSchemaAndRedaction(t *testing.T) {
 						t.Fatal("strict response schema missing")
 					}
 					if strings.Contains(request.Messages[0]["content"], "final policy gate") {
-						content, _ := json.Marshal(scopeDecision{Decision: "allow", Reason: "in scope"})
+						content, _ := json.Marshal(scopeDecision{Decision: "allow", VerifiedIntent: intent, Reason: "in scope"})
 						out, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": string(content)}}}, "usage": map[string]int{"prompt_tokens": 5, "completion_tokens": 2}})
 						_, _ = w.Write(out)
 						return
@@ -441,9 +441,11 @@ func TestOpenAIIntentScopeConsensus(t *testing.T) {
 		wantResponse      string
 		verifierMalformed bool
 	}{
-		{name: "poem rejected", prompt: "Write a poem about sunlight", primary: intentRoute{Intent: "conversation", LanguageCode: "en", Response: "Here is a poem", Reason: "chat"}, decision: scopeDecision{Decision: "reject", Reason: "creative writing"}, wantIntent: "reject"},
-		{name: "greeting allowed", prompt: "Hello assistant", primary: intentRoute{Intent: "conversation", LanguageCode: "en", Response: "Hello. How can I help with this app?", Reason: "greeting"}, decision: scopeDecision{Decision: "allow", Reason: "assistant greeting"}, wantIntent: "conversation", wantResponse: "Hello. How can I help with this app?"},
-		{name: "storage allowed", prompt: "Check selected server storage", primary: intentRoute{Intent: "server_operation", LanguageCode: "en", Reason: "fresh diagnostics"}, decision: scopeDecision{Decision: "allow", Reason: "selected server diagnostics"}, wantIntent: "server_operation"},
+		{name: "poem rejected", prompt: "Write a poem about sunlight", primary: intentRoute{Intent: "conversation", LanguageCode: "en", Response: "Here is a poem", Reason: "chat"}, decision: scopeDecision{Decision: "reject", VerifiedIntent: "reject", Reason: "creative writing"}, wantIntent: "reject"},
+		{name: "greeting allowed", prompt: "Hello assistant", primary: intentRoute{Intent: "conversation", LanguageCode: "en", Response: "Hello. How can I help with this app?", Reason: "greeting"}, decision: scopeDecision{Decision: "allow", VerifiedIntent: "conversation", Reason: "assistant greeting"}, wantIntent: "conversation", wantResponse: "Hello. How can I help with this app?"},
+		{name: "storage allowed", prompt: "Check selected server storage", primary: intentRoute{Intent: "server_operation", LanguageCode: "en", Reason: "fresh diagnostics"}, decision: scopeDecision{Decision: "allow", VerifiedIntent: "server_operation", Reason: "selected server diagnostics"}, wantIntent: "server_operation"},
+		{name: "installation allowed", prompt: "instalkan speedtest-cli", primary: intentRoute{Intent: "server_mutation", LanguageCode: "id", Reason: "software installation"}, decision: scopeDecision{Decision: "allow", VerifiedIntent: "server_mutation", Reason: "selected server management"}, wantIntent: "server_mutation"},
+		{name: "mutation mismatch rejected", prompt: "Check storage", primary: intentRoute{Intent: "server_mutation", LanguageCode: "en", Reason: "change"}, decision: scopeDecision{Decision: "allow", VerifiedIntent: "server_operation", Reason: "diagnostic only"}, wantIntent: "reject"},
 		{name: "malformed verifier fails closed", prompt: "Hello", primary: intentRoute{Intent: "conversation", LanguageCode: "en", Response: "Hello", Reason: "greeting"}, verifierMalformed: true},
 	}
 	for _, tc := range tests {
@@ -545,7 +547,7 @@ func TestOpenAIIntentRouterRetriesTransientProviderFailure(t *testing.T) {
 		}
 		content := `{"intent":"server_operation","language_code":"id","response":"","reason":"fresh server data"}`
 		if calls == 3 {
-			content = `{"decision":"allow","reason":"selected server diagnostic"}`
+			content = `{"decision":"allow","verified_intent":"server_operation","reason":"selected server diagnostic"}`
 		}
 		out, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}, "usage": map[string]int{"prompt_tokens": 2, "completion_tokens": 1}})
 		_, _ = w.Write(out)
@@ -583,6 +585,17 @@ func TestUnrestrictedCommandsRequireExplicitPolicy(t *testing.T) {
 	}
 }
 
+func TestUnrestrictedPlannerForcesHighRisk(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Install\",\"summary\":\"Install package\",\"risk\":\"low\",\"steps\":[{\"description\":\"Install speedtest\",\"executable\":\"sh\",\"args\":[\"-lc\",\"apt-get install -y speedtest-cli\"]}]}"}}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`))
+	}))
+	defer provider.Close()
+	plan, _, err := requestOpenAIPlan(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "id", "instalkan speedtest-cli", nil, "unrestricted_approval")
+	if err != nil || plan.Risk != "high" {
+		t.Fatalf("plan=%+v err=%v", plan, err)
+	}
+}
+
 func TestEffectiveIntent(t *testing.T) {
 	tests := []struct{ policy, route, want string }{
 		{"approval_required", "server_explanation", "server_operation"},
@@ -598,6 +611,21 @@ func TestEffectiveIntent(t *testing.T) {
 		if got := effectiveIntent(tc.policy, tc.route); got != tc.want {
 			t.Errorf("effectiveIntent(%q, %q) = %q, want %q", tc.policy, tc.route, got, tc.want)
 		}
+	}
+}
+
+func TestMutationEscalatesToApprovedFullAccess(t *testing.T) {
+	if got := effectiveOperationPolicy("approval_required", "server_mutation"); got != "unrestricted_approval" {
+		t.Fatalf("policy=%q", got)
+	}
+	if got := effectiveOperationPolicy("unrestricted_approval", "server_mutation"); got != "unrestricted_approval" {
+		t.Fatalf("policy=%q", got)
+	}
+	if got := effectiveOperationPolicy("explain_only", "server_mutation"); got != "explain_only" {
+		t.Fatalf("policy=%q", got)
+	}
+	if got := effectiveOperationPolicy("approval_required", "server_operation"); got != "approval_required" {
+		t.Fatalf("policy=%q", got)
 	}
 }
 
