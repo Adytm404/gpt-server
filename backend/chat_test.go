@@ -13,7 +13,7 @@ import (
 )
 
 func TestPromptGuard(t *testing.T) {
-	accepted := []string{"Check server disk usage", "Show failed systemd services", "Inspect Docker container status", "Diagnose why the server CPU load is high", "Explain server health", "Jelaskan status server"}
+	accepted := []string{"Check server disk usage", "Show failed systemd services", "Inspect Docker container status", "Diagnose why the server CPU load is high", "Explain server health", "Jelaskan status server", "cek storage sekarang sisa berapa", "lihat ruang penyimpanan server", "berapa kapasitas disk yang tersedia", "cek kesehatan server"}
 	for _, prompt := range accepted {
 		if err := validateChatPrompt(prompt); err != nil {
 			t.Errorf("safe prompt %q rejected: %v", prompt, err)
@@ -125,7 +125,7 @@ func TestOpenAIPlannerKeyedKeylessUsageAndFence(t *testing.T) {
 }
 
 func TestPreferredResponseLanguage(t *testing.T) {
-	for _, prompt := range []string{"Lihat ruang penyimpanan", "Kenapa server gagal?", "Tampilkan memori"} {
+	for _, prompt := range []string{"Lihat ruang penyimpanan", "Kenapa server gagal?", "Tampilkan memori", "cek storage sekarang sisa berapa"} {
 		if got := preferredResponseLanguage(prompt); got != "Bahasa Indonesia" {
 			t.Errorf("language(%q)=%q", prompt, got)
 		}
