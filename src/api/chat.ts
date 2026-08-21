@@ -55,7 +55,10 @@ export type OperationEvent = {
   stepId?: string
   exitCode?: number
   createdAt?: string
+  messageId?: string
 }
+
+export type ChatPolicy = 'approval_required' | 'explain_only'
 
 export type ChatConfig = {
   configured: boolean
@@ -128,7 +131,7 @@ export const chatApi = {
   async updateThread(id: string, input: { title: string; status: 'active' | 'archived' }) { return threadFromDTO(unwrapOne(await apiRequest(`/api/v1/chat/threads/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }), 'thread')) },
   async deleteThread(id: string) { return apiRequest<void>(`/api/v1/chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
   async listMessages(id: string) { return unwrapList<unknown>(await apiRequest(`/api/v1/chat/threads/${encodeURIComponent(id)}/messages`), 'messages').map(messageFromDTO) },
-  async sendMessage(id: string, input: { content: string; policy: 'approval_required' | 'read_only' }) {
+  async sendMessage(id: string, input: { content: string; policy: ChatPolicy }) {
     const body = await apiRequest<unknown>(`/api/v1/chat/threads/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ content: input.content, policy: input.policy }) })
     const dto = (body || {}) as AnyDTO
     return { message: dto.message ? messageFromDTO(dto.message) : ('role' in dto ? messageFromDTO(dto) : undefined), operation: operationFromResponse(body) }
@@ -155,7 +158,7 @@ export function operationEventFromMessage(message: MessageEvent): OperationEvent
   const payload = { ...envelope, ...nested }
   const type = message.type !== 'message' ? message.type : text(envelope.event_type ?? envelope.type ?? payload.stream, 'message')
   const envelopeId = envelope.id ?? envelope.event_id
-  return { id: message.lastEventId || (typeof envelopeId === 'number' ? String(envelopeId) : text(envelopeId)), type, text: text(payload.chunk ?? payload.text ?? payload.output ?? payload.data ?? payload.message), status: text(payload.status ?? payload.state) || undefined, stepId: text(envelope.step_id ?? payload.step_id) || undefined, exitCode: number(payload.exit_code), createdAt: text(envelope.created_at ?? envelope.timestamp ?? payload.created_at ?? payload.timestamp) || undefined }
+  return { id: message.lastEventId || (typeof envelopeId === 'number' ? String(envelopeId) : text(envelopeId)), type, text: text(payload.delta ?? payload.chunk ?? payload.text ?? payload.output ?? payload.data ?? payload.message), status: text(payload.status ?? payload.state) || undefined, stepId: text(envelope.step_id ?? payload.step_id) || undefined, exitCode: number(payload.exit_code), createdAt: text(envelope.created_at ?? envelope.timestamp ?? payload.created_at ?? payload.timestamp) || undefined, messageId: text(envelope.message_id ?? payload.message_id) || undefined }
 }
 
 export function reduceOperationEvents(current: OperationEvent[], incoming: OperationEvent[]) {

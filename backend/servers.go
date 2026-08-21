@@ -677,11 +677,8 @@ func collectHealthInventory(ctx context.Context, client *ssh.Client) (healthInve
 	session.Stderr = &output
 	done := make(chan error, 1)
 	go func() { done <- session.Run(healthInventoryCommand) }()
-	select {
-	case err = <-done:
-	case <-ctx.Done():
-		_ = session.Close()
-		<-done
+	err = waitSSHCommand(ctx, session, done)
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return healthInventory{}, errors.New("SSH health command timed out")
 	}
 	if output.exceeded {

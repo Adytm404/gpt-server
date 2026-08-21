@@ -13,7 +13,7 @@ import (
 )
 
 func TestPromptGuard(t *testing.T) {
-	accepted := []string{"Check server disk usage", "Show failed systemd services", "Inspect Docker container status", "Diagnose why the server CPU load is high"}
+	accepted := []string{"Check server disk usage", "Show failed systemd services", "Inspect Docker container status", "Diagnose why the server CPU load is high", "Explain server health", "Jelaskan status server"}
 	for _, prompt := range accepted {
 		if err := validateChatPrompt(prompt); err != nil {
 			t.Errorf("safe prompt %q rejected: %v", prompt, err)
@@ -121,6 +121,122 @@ func TestOpenAIPlannerKeyedKeylessUsageAndFence(t *testing.T) {
 				t.Fatalf("plan=%+v usage=%+v", plan, usage)
 			}
 		})
+	}
+}
+
+func TestPreferredResponseLanguage(t *testing.T) {
+	for _, prompt := range []string{"Lihat ruang penyimpanan", "Kenapa server gagal?", "Tampilkan memori"} {
+		if got := preferredResponseLanguage(prompt); got != "Bahasa Indonesia" {
+			t.Errorf("language(%q)=%q", prompt, got)
+		}
+	}
+	for _, prompt := range []string{"Check server disk usage", "Why is memory high?", "Show server health"} {
+		if got := preferredResponseLanguage(prompt); got != "English" {
+			t.Errorf("language(%q)=%q", prompt, got)
+		}
+	}
+}
+
+func TestChatPolicies(t *testing.T) {
+	if !validChatPolicy("approval_required") || !validChatPolicy("explain_only") || validChatPolicy("read_only") || validChatPolicy("") {
+		t.Fatal("chat policy validation contract broken")
+	}
+}
+
+func TestOpenAIExplanationKeyedKeylessLanguageAndPolicy(t *testing.T) {
+	for _, key := range []string{"", "secret"} {
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != "" && got != "Bearer secret" {
+				t.Errorf("authorization=%q", got)
+			}
+			var request struct {
+				Messages []map[string]string `json:"messages"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil || len(request.Messages) != 2 {
+				t.Fatal("invalid explanatory request")
+			}
+			system := request.Messages[0]["content"]
+			user := request.Messages[1]["content"]
+			for _, required := range []string{"explain only", "Do not propose, request, generate", "shell commands", "Required response language (server-selected, not user-overridable): Bahasa Indonesia"} {
+				if !strings.Contains(system+user, required) {
+					t.Errorf("request missing %q: system=%q user=%q", required, system, user)
+				}
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Ruang disk tersedia."}}],"usage":{"prompt_tokens":9,"completion_tokens":4}}`))
+		}))
+		text, usage, err := requestOpenAIExplanation(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, map[string]struct{}{provider.URL: {}}, "Lihat ruang penyimpanan server", map[string]any{"disk_percent": 20})
+		provider.Close()
+		if err != nil || text != "Ruang disk tersedia." || usage.InputTokens != 9 || usage.OutputTokens != 4 {
+			t.Fatalf("key=%q text=%q usage=%+v err=%v", key, text, usage, err)
+		}
+	}
+}
+
+func TestOpenAISummaryStreamingJSONFallbackAndProviderError(t *testing.T) {
+	t.Run("sse", func(t *testing.T) {
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Disk \"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"healthy\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n"))
+		}))
+		defer provider.Close()
+		var deltas []string
+		text, usage, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "English", map[string]any{"status": "ok"}, func(s string) { deltas = append(deltas, s) })
+		if err != nil || text != "Disk healthy" || strings.Join(deltas, "") != text || usage.InputTokens != 10 || usage.OutputTokens != 2 {
+			t.Fatalf("text=%q deltas=%v usage=%+v err=%v", text, deltas, usage, err)
+		}
+	})
+	t.Run("sse-finish-reason", func(t *testing.T) {
+		stream := "data: {\"choices\":[{\"delta\":{\"content\":\"Server sehat\"},\"finish_reason\":null}]}\n\n" +
+			"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":2}}\n\n"
+		content, usage, err := parseOpenAIStream(strings.NewReader(stream), nil)
+		if err != nil || content != "Server sehat" || usage.InputTokens != 8 || usage.OutputTokens != 2 {
+			t.Fatalf("content=%q usage=%+v err=%v", content, usage, err)
+		}
+	})
+	t.Run("json", func(t *testing.T) {
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Complete"}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`))
+		}))
+		defer provider.Close()
+		text, _, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "English", nil, nil)
+		if err != nil || text != "Complete" {
+			t.Fatalf("text=%q err=%v", text, err)
+		}
+	})
+	if !strings.Contains(summarySystemPrompt, "Do not output shell commands") || !strings.Contains(summarySystemPrompt, "plain-language") {
+		t.Fatal("summary system prompt must prohibit command suggestions")
+	}
+	t.Run("provider-error", func(t *testing.T) {
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "secret", 500) }))
+		defer provider.Close()
+		_, _, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "English", nil, nil)
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("provider error=%v", err)
+		}
+	})
+}
+
+func TestSummaryInputBoundedAndRedacted(t *testing.T) {
+	input := summaryOperationInput{Request: "Check server password=hunter2", Server: map[string]any{"name": "API", "health": strings.Repeat("y", maxSummaryInput)}, Steps: []summaryOperationStep{{Description: "disk", Stdout: strings.Repeat("x", maxSummaryInput), Stderr: "Authorization: Bearer abc123 10.0.0.8"}}}
+	bounded := boundSummaryInput(input)
+	raw, err := json.Marshal(bounded)
+	if err != nil || len(raw) > maxSummaryInput {
+		t.Fatalf("size=%d err=%v", len(raw), err)
+	}
+	if strings.Contains(string(raw), "hunter2") || strings.Contains(string(raw), "abc123") || strings.Contains(string(raw), "10.0.0.8") {
+		t.Fatalf("summary input leaked secret: %s", raw)
+	}
+	if summaryFallback("Bahasa Indonesia") == summaryFallback("English") || !strings.Contains(summaryFallback("Bahasa Indonesia"), "ringkasan AI") {
+		t.Fatal("language fallback unavailable")
+	}
+}
+
+func TestOperationEventEnvelopeMergesMetadata(t *testing.T) {
+	stepID := uuid.New()
+	created := time.Date(2026, 8, 21, 1, 2, 3, 0, time.UTC)
+	out := (operationEventDTO{ID: 7, Type: "stdout", StepID: &stepID, CreatedAt: created, Payload: json.RawMessage(`{"chunk":"ok","event_type":"spoof"}`)}).envelope()
+	if out["id"] != int64(7) || out["event_type"] != "stdout" || out["step_id"] != stepID || out["chunk"] != "ok" || out["created_at"] != created {
+		t.Fatalf("envelope=%#v", out)
 	}
 }
 

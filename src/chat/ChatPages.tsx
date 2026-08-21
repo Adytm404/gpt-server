@@ -1,16 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Command, Download, MessageSquare, MoreHorizontal, Play, Plus, Server as ServerIcon, ShieldCheck, Sparkles, Square, Terminal } from 'lucide-react'
-import { chatApi, operationEventFromMessage, operationEventsUrl, reduceOperationEvents, type ChatConfig, type ChatMessage, type ChatThread, type Operation, type OperationEvent } from '../api/chat'
+import { chatApi, operationEventFromMessage, operationEventsUrl, reduceOperationEvents, type ChatConfig, type ChatMessage, type ChatPolicy, type ChatThread, type Operation, type OperationEvent } from '../api/chat'
 import { serversApi, type Server } from '../api/servers'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
 const finalStatuses = new Set(['succeeded', 'completed', 'failed', 'cancelled', 'canceled', 'rejected'])
-const busyStatuses = new Set(['planning', 'planned', 'approved', 'queued', 'running', 'executing'])
+const busyStatuses = new Set(['planning', 'planned', 'approved', 'queued', 'running', 'executing', 'summarizing'])
 const approvalStatuses = new Set(['pending_approval', 'awaiting_approval', 'requires_approval'])
-const operationEventTypes = ['planning', 'plan_ready', 'approved', 'running', 'step.started', 'stdout', 'stderr', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected']
-const finalEventTypes = new Set(['completed', 'failed', 'cancelled', 'rejected'])
-const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'running', 'step.started', 'step.completed', ...finalEventTypes])
+const operationEventTypes = ['planning', 'plan_ready', 'approved', 'running', 'step.started', 'stdout', 'stderr', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'assistant.delta', 'summary.started', 'summary.completed', 'summary.failed', 'summarizing']
+const streamFinalEventTypes = new Set(['summary.completed', 'summary.failed', 'cancelled', 'rejected'])
+const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'running', 'step.started', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'summary.started', 'summary.completed', 'summary.failed'])
+
+const policies: Array<{ value: ChatPolicy; label: string; description: string }> = [
+  { value: 'approval_required', label: 'Approval required', description: 'AI plans commands; explicit approval; SSH executes.' },
+  { value: 'explain_only', label: 'Explain only', description: 'Analyze latest stored server context only. No commands will run.' },
+]
 
 type ThreadContextValue = { threads: ChatThread[]; loading: boolean; error: string; refresh: () => Promise<void>; config: ChatConfig | null; configLoading: boolean; configError: string; refreshConfig: () => Promise<void> }
 const ThreadContext = createContext<ThreadContextValue | null>(null)
@@ -87,22 +92,32 @@ function ServerPicker({ servers, value, onChange }: { servers: Server[]; value: 
   return <div className={cn('server-picker', open && 'open')} ref={root}><button className="server-picker-trigger" type="button" onClick={() => setOpen(value => !value)} aria-haspopup="listbox" aria-expanded={open}><i className={cn('server-picker-icon', selected.status.toLowerCase())}><ServerIcon size={14} /></i><span><b>{selected.name}</b><small>{selected.environment}</small></span><ChevronDown size={13} /></button>{open && <div className="server-picker-menu" role="listbox"><header><span>Target server</span><small>{servers.filter(server => server.status === 'Online').length} online</small></header>{servers.map(server => <button type="button" role="option" aria-selected={server.id === value} disabled={server.status === 'Offline'} className={server.id === value ? 'selected' : ''} key={server.id} onClick={() => { onChange(server.id); setOpen(false) }}><i className={cn('server-option-icon', server.status.toLowerCase())}><ServerIcon size={14} /></i><span><b>{server.name}</b><small>{server.host} / {server.environment}</small></span><em><i />{server.status}</em>{server.id === value && <Check size={14} />}</button>)}<footer><ShieldCheck size={12} /> Commands run only on selected server</footer></div>}</div>
 }
 
-function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compact = false, disabled = false, disabledReason = '', preset = '' }: { servers: Server[]; selectedServer: string; setSelectedServer?: (id: string) => void; onSubmit: (prompt: string) => Promise<void>; compact?: boolean; disabled?: boolean; disabledReason?: string; preset?: string }) {
+function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compact = false, disabled = false, disabledReason = '', preset = '' }: { servers: Server[]; selectedServer: string; setSelectedServer?: (id: string) => void; onSubmit: (prompt: string, policy: ChatPolicy) => Promise<void>; compact?: boolean; disabled?: boolean; disabledReason?: string; preset?: string }) {
   const [prompt, setPrompt] = useState(preset)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [policy, setPolicy] = useState<ChatPolicy>('approval_required')
+  const [policyOpen, setPolicyOpen] = useState(false)
+  const policyRoot = useRef<HTMLDivElement>(null)
   useEffect(() => { if (preset) setPrompt(preset) }, [preset])
+  useEffect(() => {
+    const close = (event: MouseEvent) => { if (!policyRoot.current?.contains(event.target as Node)) setPolicyOpen(false) }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setPolicyOpen(false) }
+    document.addEventListener('mousedown', close); document.addEventListener('keydown', escape)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
+  }, [])
   const submit = async () => {
     if (!prompt.trim() || disabled || submitting || !selectedServer) return
     setSubmitting(true); setError('')
-    try { await onSubmit(prompt.trim()); setPrompt('') }
+    try { await onSubmit(prompt.trim(), policy); setPrompt('') }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to send message') }
     finally { setSubmitting(false) }
   }
   return <div className={cn('composer', compact && 'compact-composer')}>
     <textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} placeholder={compact ? 'Ask a follow-up...' : 'Describe what you want to inspect...'} aria-label="Ask OpsAI" rows={compact ? 1 : 3} disabled={disabled || submitting} />
     {error && <div className="auth-error composer-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
-    <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<span className="mode-button"><ShieldCheck size={15} /> Approval required</span>{submitting && <span className="composer-planning"><span className="tiny-spinner" /> Planning operation...</span>}</div><button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button></div>
+    <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<div className="composer-tool-popover" ref={policyRoot}><button type="button" className={cn('mode-button', policyOpen && 'active')} onClick={() => setPolicyOpen(open => !open)} aria-label="Execution policy" aria-haspopup="listbox" aria-expanded={policyOpen}><ShieldCheck size={15} /> {policies.find(item => item.value === policy)?.label} <ChevronDown size={13} /></button>{policyOpen && <div className="tool-menu policy-menu" role="listbox" aria-label="Execution policy options"><header><span>Execution policy</span><small>For this message</small></header>{policies.map(item => <button type="button" role="option" aria-selected={item.value === policy} className={item.value === policy ? 'selected' : ''} key={item.value} onClick={() => { setPolicy(item.value); setPolicyOpen(false) }}><i><ShieldCheck size={15} /></i><span><b>{item.label}</b><small>{item.description}</small></span>{item.value === policy && <Check size={14} />}</button>)}</div>}</div>{submitting && <span className="composer-planning"><span className="tiny-spinner" /> {policy === 'explain_only' ? 'Analyzing context...' : 'Planning operation...'}</span>}</div><button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button></div>
+    <p className="composer-policy-scope">{policies.find(item => item.value === policy)?.description}</p>
     {disabledReason && <p className="composer-disabled-reason">{disabledReason}</p>}
   </div>
 }
@@ -129,9 +144,9 @@ export function ChatHomePage() {
       setSelected(initial?.id || '')
     }).catch(caught => setError(caught instanceof Error ? caught.message : 'Unable to load chat configuration')).finally(() => setLoading(false))
   }, [])
-  const submit = async (content: string) => {
+  const submit = async (content: string, policy: ChatPolicy) => {
     const created = await chatApi.createThread({ serverId: selected, title: content.slice(0, 80) })
-    try { await chatApi.sendMessage(created.id, { content, policy: 'approval_required' }) }
+    try { await chatApi.sendMessage(created.id, { content, policy }) }
     catch (caught) { try { await chatApi.deleteThread(created.id) } catch { /* Best-effort cleanup keeps original planning error. */ }; await refresh(); throw caught }
     await refresh(); navigate(`/chat/${created.id}`)
   }
@@ -169,7 +184,7 @@ function useOperationEvents(operation: Operation | null, onState: () => void) {
         if (event.id) lastId.current = event.id
         setEvents(current => reduceOperationEvents(current, [event]))
         if (lifecycleEventTypes.has(event.type) || (event.status && finalStatuses.has(event.status))) scheduleStateRefresh()
-        if (finalEventTypes.has(event.type) || (event.status && finalStatuses.has(event.status))) { source?.close(); setConnection('closed') }
+        if (streamFinalEventTypes.has(event.type)) { source?.close(); setConnection('closed') }
       }
       source.addEventListener('message', receive as EventListener)
       for (const type of operationEventTypes) source.addEventListener(type, receive as EventListener)
@@ -178,15 +193,19 @@ function useOperationEvents(operation: Operation | null, onState: () => void) {
     connect()
     return () => { stopped = true; window.clearTimeout(timer); window.clearTimeout(refreshTimer); source?.close() }
   }, [operation?.id])
-  return { events, connection }
+  const summaryEvents = events.filter(event => ['assistant.delta', 'summary.started', 'summary.completed', 'summary.failed', 'summarizing'].includes(event.type))
+  const summaryText = summaryEvents.filter(event => event.type === 'assistant.delta').map(event => event.text).join('') || [...summaryEvents].reverse().find(event => event.type === 'summary.failed' && event.text)?.text || ''
+  const summaryMessageId = [...summaryEvents].reverse().find(event => event.messageId)?.messageId
+  const summaryPhase = summaryEvents.some(event => event.type === 'summary.failed') ? 'failed' : summaryEvents.some(event => event.type === 'summary.completed') ? 'completed' : summaryEvents.length ? 'summarizing' : 'idle'
+  return { events, connection, summaryText, summaryMessageId, summaryPhase }
 }
 
-function OperationCard({ operation, mutate }: { operation: Operation; mutate: (action: 'approve' | 'reject' | 'cancel') => Promise<void> }) {
+function OperationCard({ operation, summarizing, mutate }: { operation: Operation; summarizing: boolean; mutate: (action: 'approve' | 'reject' | 'cancel') => Promise<void> }) {
   const completed = operation.steps.filter(step => ['completed', 'succeeded', 'success'].includes(step.status)).length
-  const progress = operation.steps.length ? Math.round(completed / operation.steps.length * 100) : 0
+  const progress = summarizing ? 100 : operation.steps.length ? Math.round(completed / operation.steps.length * 100) : 0
   const pendingApproval = approvalStatuses.has(operation.status)
   return <div className="plan-card"><div className="plan-head"><div><i><Command size={17} /></i><span><strong>{operation.title}</strong><small>{operation.steps.length} steps / {operation.status.replaceAll('_', ' ')}</small></span></div><span className={cn('risk-badge', finalStatuses.has(operation.status) && 'complete')}><ShieldCheck size={13} /> {operation.status.replaceAll('_', ' ')}</span></div>
-    {busyStatuses.has(operation.status) && <div className="operation-progress"><div><span>Operation progress</span><b>{progress}%</b></div><i><b style={{ width: `${progress}%` }} /></i><small>{completed} of {operation.steps.length} steps completed</small></div>}
+    {(busyStatuses.has(operation.status) || summarizing) && <div className="operation-progress"><div><span>Operation progress</span><b>{progress}%</b></div><i><b style={{ width: `${progress}%` }} /></i><small>{summarizing ? 'Commands complete. Generating explanation...' : `${completed} of ${operation.steps.length} steps completed`}</small></div>}
     {operation.summary && <p className="operation-summary">{operation.summary}</p>}
     <div className="plan-steps">{operation.steps.map((step, index) => <div key={step.id} className={cn(['completed', 'succeeded', 'success'].includes(step.status) && 'done', step.status === 'running' && 'running')}><i>{['completed', 'succeeded', 'success'].includes(step.status) ? <Check size={13} /> : index + 1}</i><span>{step.title}{step.command && <code className="plan-command">{step.command}</code>}{step.stdout && <code className="plan-step-output">{step.stdout}</code>}{step.stderr && <code className="plan-step-output stderr">{step.stderr}</code>}</span><b>{step.exitCode != null ? `${step.status} (${step.exitCode})` : step.status}</b></div>)}</div>
     {operation.error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {operation.error}</div>}
@@ -233,7 +252,7 @@ export function ChatThreadPage() {
     finally { if (mounted.current && currentId.current === requestedId && loadGeneration.current === generation) setLoading(false) }
   }, [id])
   useEffect(() => { setLoading(true); void load() }, [load])
-  const { events, connection } = useOperationEvents(operation, () => { void load() })
+  const { events, connection, summaryText, summaryMessageId, summaryPhase } = useOperationEvents(operation, () => { void load() })
   const mutate = async (action: 'approve' | 'reject' | 'cancel') => {
     if (!operation) return
     try {
@@ -243,11 +262,12 @@ export function ChatThreadPage() {
       await load()
     } catch (caught) { setError(caught instanceof Error ? caught.message : `Unable to ${action} operation`) }
   }
-  const followUp = async (content: string) => {
+  const followUp = async (content: string, policy: ChatPolicy) => {
     try {
-      const result = await chatApi.sendMessage(id, { content, policy: 'approval_required' })
+      const result = await chatApi.sendMessage(id, { content, policy })
       if (result.operation && mounted.current && currentId.current === id) setOperation(result.operation)
       await load(); await refreshThreads()
+      if (!result.operation && result.message && mounted.current && currentId.current === id) setMessages(current => current.some(message => message.id === result.message?.id || (message.role === 'assistant' && message.content === result.message?.content)) ? current : [...current, result.message!])
     } catch (caught) {
       await load(); await refreshThreads()
       throw caught
@@ -258,12 +278,15 @@ export function ChatThreadPage() {
   const remove = async () => { if (busy) return; if (!window.confirm('Delete this chat permanently?')) return; await chatApi.deleteThread(id); await refreshThreads(); navigate('/chat') }
   if (loading) return <div className="content-page"><p>Loading chat...</p></div>
   if (!thread) return <div className="content-page"><div className="auth-error" role="alert">{error || 'Chat not found'}</div></div>
-  const busy = operation ? busyStatuses.has(operation.status) || approvalStatuses.has(operation.status) : false
+  const busy = operation ? busyStatuses.has(operation.status) || approvalStatuses.has(operation.status) || summaryPhase === 'summarizing' : false
+  const summaryPersisted = messages.some(message => message.role === 'assistant' && ((summaryMessageId && message.id === summaryMessageId) || (summaryText && message.content === summaryText)))
+  const showStreamedSummary = summaryPhase !== 'idle' && !summaryPersisted && (summaryPhase === 'summarizing' || Boolean(summaryText))
   return <div className="thread-layout page-enter"><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div><div className="thread-menu"><button className="icon-button bordered" onClick={() => setMenu(value => !value)} aria-label="Thread actions"><MoreHorizontal size={18} /></button>{menu && <div><button onClick={() => void rename()}>Rename</button>{busy ? <span className="thread-menu-blocked">Cancel operation first to archive or delete.</span> : <><button onClick={() => void archive()}>Archive</button><button className="danger" onClick={() => void remove()}>Delete</button></>}</div>}</div></div>
     {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
     <div className="conversation">{messages.length === 0 && !operation && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{messages.map(message => <div className={cn('message', message.role === 'user' ? 'user-message' : 'ai-message')} key={message.id}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div><p>{message.content}</p>{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>)}
     {!operation && messages.some(message => message.role === 'user') && !messages.some(message => message.role === 'assistant') && <div className="message ai-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div><div className="message-meta"><strong>OpsAI</strong><span>planning...</span></div><p>Building operation plan for selected server scope.</p><span className="tiny-spinner" /></div></div>}
-    {operation && <div className="message ai-message"><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={operation} mutate={mutate} /></div></div>}</div>
+    {operation && <div className="message ai-message"><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={operation} summarizing={summaryPhase === 'summarizing'} mutate={mutate} /></div></div>}
+    {showStreamedSummary && <div className="message ai-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI sedang menjelaskan hasil...</span>}</div><p>{summaryText}{summaryPhase === 'summarizing' && <i className="summary-cursor" aria-hidden="true" />}</p></div></div>}</div>
     <div className="thread-composer"><Composer compact servers={[]} selectedServer={thread.serverId} onSubmit={followUp} disabled={busy} disabledReason={busy ? `Follow-up unavailable while operation is ${operation?.status.replaceAll('_', ' ')}.` : ''} /></div></section>
     {operation && <ExecutionPanel operation={operation} events={events} connection={connection} cancel={() => mutate('cancel')} />}
   </div>

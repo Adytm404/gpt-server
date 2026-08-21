@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql", "012_operation_summaries.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,24 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestOperationSummariesMigration(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/012_operation_summaries.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{"DROP CONSTRAINT IF EXISTS operations_status_check", "'summarizing'", "ALTER COLUMN operation_id DROP NOT NULL", "phase text NOT NULL DEFAULT 'planning'", "phase IN ('planning','summary','explain')", "message_id uuid REFERENCES chat_messages", "DROP CONSTRAINT IF EXISTS token_usage_operation_id_key", "token_usage_operation_phase_idx", "token_usage_message_id_idx"} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("012 migration missing %q", clause)
+		}
+	}
+	for _, forbidden := range []string{"INSERT INTO chat_messages", "INSERT INTO token_usage"} {
+		if strings.Contains(content, forbidden) {
+			t.Errorf("012 migration contains seed %q", forbidden)
+		}
 	}
 }
 

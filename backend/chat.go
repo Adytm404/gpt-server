@@ -255,7 +255,7 @@ func (s *server) deleteChatThread(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tag, err := s.db.Exec(r.Context(), `DELETE FROM chat_threads t WHERE t.id=$1 AND t.workspace_id=$2 AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.thread_id=t.id AND o.status IN ('planning','pending_approval','approved','running'))`, id, authFrom(r.Context()).WorkspaceID)
+	tag, err := s.db.Exec(r.Context(), `DELETE FROM chat_threads t WHERE t.id=$1 AND t.workspace_id=$2 AND NOT EXISTS (SELECT 1 FROM operations o WHERE o.thread_id=t.id AND o.status IN ('planning','pending_approval','approved','running','summarizing'))`, id, authFrom(r.Context()).WorkspaceID)
 	if err != nil {
 		s.dbError(w, r, err)
 		return
@@ -363,7 +363,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 		Policy  string `json:"policy"`
 	}
-	if decodeJSON(r, &in) != nil || validateChatContent(in.Content) != nil || in.Policy != "approval_required" {
+	if decodeJSON(r, &in) != nil || validateChatContent(in.Content) != nil || !validChatPolicy(in.Policy) {
 		s.writeError(w, r, 422, "request is outside permitted server management scope")
 		return
 	}
@@ -387,9 +387,13 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	var serverID uuid.UUID
 	var serverUpdatedAt time.Time
 	var serverContext map[string]any
-	err := s.db.QueryRow(r.Context(), `SELECT t.server_id,s.updated_at,jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'uptime_seconds',s.uptime_seconds,'status',s.status,'last_checked_at',s.last_checked_at,'health',COALESCE((SELECT jsonb_build_object('status',h.status,'cpu_percent',h.cpu_percent,'memory_percent',h.memory_percent,'disk_percent',h.disk_percent,'services',h.services,'details',h.details,'checked_at',h.checked_at) FROM server_health_snapshots h WHERE h.server_id=s.id ORDER BY h.checked_at DESC LIMIT 1),'{}'::jsonb)) FROM chat_threads t JOIN servers s ON s.id=t.server_id WHERE t.id=$1 AND t.workspace_id=$2 AND t.status='active' AND s.deleted_at IS NULL`, threadID, a.WorkspaceID).Scan(&serverID, &serverUpdatedAt, &serverContext)
+	err := s.db.QueryRow(r.Context(), `SELECT t.server_id,s.updated_at,jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'uptime_seconds',s.uptime_seconds,'status',s.status,'last_checked_at',s.last_checked_at,'health',COALESCE((SELECT jsonb_build_object('status',h.status,'cpu_percent',h.cpu_percent,'memory_percent',h.memory_percent,'disk_percent',h.disk_percent,'services',h.services,'checked_at',h.checked_at) FROM server_health_snapshots h WHERE h.server_id=s.id ORDER BY h.checked_at DESC LIMIT 1),'{}'::jsonb)) FROM chat_threads t JOIN servers s ON s.id=t.server_id WHERE t.id=$1 AND t.workspace_id=$2 AND t.status='active' AND s.deleted_at IS NULL`, threadID, a.WorkspaceID).Scan(&serverID, &serverUpdatedAt, &serverContext)
 	if err != nil {
 		s.dbError(w, r, err)
+		return
+	}
+	if in.Policy == "explain_only" {
+		s.createExplanation(w, r, threadID, a, in.Content, serverContext)
 		return
 	}
 	active, err := s.hasActiveOperation(r.Context(), threadID, a.WorkspaceID)
@@ -509,7 +513,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		_, err = tx.Exec(r.Context(), `INSERT INTO operation_steps(id,operation_id,position,description,executable,args) VALUES($1,$2,$3,$4,$5,$6)`, uuid.New(), opID, i+1, step.Description, step.Executable, args)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, opID, model.ID, usage.InputTokens, usage.OutputTokens)
+		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,$5,'planning',$6,$7::bigint,$8::bigint,$7::bigint+$8::bigint,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, opID, assistantID, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	if err == nil {
 		err = insertOperationEvent(r.Context(), tx, opID, "plan_ready", uuid.Nil, map[string]any{"steps": len(plan.Steps), "input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens})
@@ -535,6 +539,76 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, 201, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: assistantContent, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": op})
+}
+
+func validChatPolicy(policy string) bool {
+	return policy == "approval_required" || policy == "explain_only"
+}
+
+func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, threadID uuid.UUID, a sessionAuth, content string, serverContext map[string]any) {
+	localUnlock := s.lockPlanningWorkspace(a.WorkspaceID)
+	defer localUnlock()
+	conn, err := s.db.Acquire(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer conn.Release()
+	lockKey := "chat-planning:" + a.WorkspaceID.String()
+	if _, err = conn.Exec(r.Context(), `SELECT pg_advisory_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, lockKey)
+	}()
+	model, err := s.resolvePlannerWith(r.Context(), conn, a.WorkspaceID)
+	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, errNoEntitlement) {
+		s.writeError(w, r, 409, "workspace AI is not configured")
+		return
+	}
+	if errors.Is(err, errQuotaExceeded) {
+		s.writeError(w, r, 429, err.Error())
+		return
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.modelRequestTimeout)
+	response, usage, err := requestOpenAIExplanation(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, content, serverContext)
+	cancel()
+	if err != nil {
+		s.writeError(w, r, 502, "model could not explain the server snapshot")
+		return
+	}
+	response = redactSummaryOutput(response)
+	userID, assistantID := uuid.New(), uuid.New()
+	tx, err := conn.Begin(r.Context())
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3)`, userID, threadID, content)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, assistantID, threadID, response, model.ID, usage.InputTokens, usage.OutputTokens)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'explain',$5,$6,$7,$6+$7,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, assistantID, model.ID, usage.InputTokens, usage.OutputTokens)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET updated_at=now() WHERE id=$1 AND workspace_id=$2`, threadID, a.WorkspaceID)
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	} else if tx != nil {
+		_ = tx.Rollback(r.Context())
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
 }
 
 func (s *server) createLocalChatMessage(w http.ResponseWriter, r *http.Request, threadID, workspaceID uuid.UUID, content, response string) {
@@ -576,7 +650,7 @@ func (s *server) failPlanning(id uuid.UUID, message string) {
 
 func (s *server) hasActiveOperation(ctx context.Context, threadID, workspaceID uuid.UUID) (bool, error) {
 	var active bool
-	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM operations WHERE thread_id=$1 AND workspace_id=$2 AND status IN ('planning','pending_approval','approved','running'))`, threadID, workspaceID).Scan(&active)
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM operations WHERE thread_id=$1 AND workspace_id=$2 AND status IN ('planning','pending_approval','approved','running','summarizing'))`, threadID, workspaceID).Scan(&active)
 	return active, err
 }
 

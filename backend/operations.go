@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 )
 
 const maxOperationOutput = 1 << 20
+const maxSummaryInput = 64 << 10
 
 func (s *server) operationRoutes(r chi.Router) {
 	r.Get("/", s.listOperations)
@@ -192,7 +194,7 @@ func (s *server) cancelOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
-	tag, err := tx.Exec(r.Context(), `UPDATE operations SET status='cancelled',error='operation cancelled',finished_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status IN ('planning','pending_approval','approved','running')`, id, a.WorkspaceID)
+	tag, err := tx.Exec(r.Context(), `UPDATE operations SET status='cancelled',error='operation cancelled',finished_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status IN ('planning','pending_approval','approved','running','summarizing')`, id, a.WorkspaceID)
 	if err != nil {
 		s.dbError(w, r, err)
 		return
@@ -221,7 +223,7 @@ func (s *server) cancelOperation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) failStaleOperations(ctx context.Context) error {
-	_, err := s.db.Exec(ctx, `WITH stale AS (UPDATE operations SET status='failed',error='server restarted before operation completed',finished_at=now(),updated_at=now() WHERE status IN ('planning','approved','running') RETURNING id) INSERT INTO operation_events(operation_id,event_type,payload) SELECT id,'failed','{"error":"server restarted"}'::jsonb FROM stale`)
+	_, err := s.db.Exec(ctx, `WITH stale AS (UPDATE operations SET status='failed',error='server restarted before operation completed',finished_at=now(),updated_at=now() WHERE status IN ('planning','approved','running','summarizing') RETURNING id) INSERT INTO operation_events(operation_id,event_type,payload) SELECT id,'failed','{"error":"server restarted"}'::jsonb FROM stale`)
 	return err
 }
 
@@ -293,7 +295,215 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 			return
 		}
 	}
-	s.finishOperation(ctx, id, "succeeded", "")
+	if err := s.beginSummarizing(ctx, id); err != nil {
+		log.Printf("operation %s could not start summary: %v", id, err)
+		s.finishOperation(context.Background(), id, "failed", "unable to start AI result summary")
+		return
+	}
+	s.summarizeOperation(ctx, id, workspaceID)
+}
+
+func (s *server) beginSummarizing(ctx context.Context, id uuid.UUID) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE operations SET status='summarizing',updated_at=now() WHERE id=$1 AND status='running'`, id)
+	if err != nil || tag.RowsAffected() != 1 {
+		if err != nil {
+			return err
+		}
+		return errors.New("operation is no longer running")
+	}
+	if err = insertOperationEvent(ctx, tx, id, "summary.started", uuid.Nil, map[string]any{"status": "summarizing"}); err == nil {
+		err = insertOperationEvent(ctx, tx, id, "summarizing", uuid.Nil, map[string]any{"status": "summarizing"})
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+type summaryOperationInput struct {
+	Request string                 `json:"request"`
+	Server  map[string]any         `json:"server"`
+	Title   string                 `json:"plan_title"`
+	Plan    string                 `json:"plan_summary"`
+	Steps   []summaryOperationStep `json:"completed_steps"`
+}
+
+type summaryOperationStep struct {
+	Description string `json:"description"`
+	ExitCode    int    `json:"exit_code"`
+	Stdout      string `json:"stdout"`
+	Stderr      string `json:"stderr"`
+}
+
+func boundSummaryInput(input summaryOperationInput) summaryOperationInput {
+	input.Request = boundedRedacted(input.Request, 4096)
+	input.Title = boundedRedacted(input.Title, 1024)
+	input.Plan = boundedRedacted(input.Plan, 4096)
+	for i := range input.Steps {
+		input.Steps[i].Description = boundedRedacted(input.Steps[i].Description, 1024)
+		input.Steps[i].Stdout = boundedRedacted(input.Steps[i].Stdout, 8192)
+		input.Steps[i].Stderr = boundedRedacted(input.Steps[i].Stderr, 8192)
+	}
+	for {
+		raw, _ := json.Marshal(input)
+		if len(raw) <= maxSummaryInput {
+			return input
+		}
+		if len(input.Steps) == 0 {
+			if _, ok := input.Server["health"]; ok {
+				delete(input.Server, "health")
+				continue
+			}
+			input.Server = map[string]any{"context_truncated": true}
+			continue
+		}
+		last := &input.Steps[len(input.Steps)-1]
+		if len(last.Stdout) > 1024 {
+			last.Stdout = last.Stdout[:len(last.Stdout)/2]
+		} else if len(last.Stderr) > 1024 {
+			last.Stderr = last.Stderr[:len(last.Stderr)/2]
+		} else {
+			input.Steps = input.Steps[:len(input.Steps)-1]
+		}
+	}
+}
+
+func boundedRedacted(value string, limit int) string {
+	value = redactSummaryOutput(strings.ToValidUTF8(value, ""))
+	if len(value) > limit {
+		value = value[:limit] + "\n[TRUNCATED]"
+	}
+	return value
+}
+
+func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UUID) {
+	var input summaryOperationInput
+	var threadID, modelID uuid.UUID
+	var model plannerModel
+	var ciphertext []byte
+	err := s.db.QueryRow(ctx, `SELECT o.thread_id,o.model_id,m.base_url,m.external_model_id,m.api_key_ciphertext,o.title,o.summary,
+		COALESCE((SELECT cm.content FROM operation_events e JOIN chat_messages cm ON cm.id=(e.payload->>'message_id')::uuid WHERE e.operation_id=o.id AND e.event_type='planning' ORDER BY e.id LIMIT 1),''),
+		jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'status',s.status,'last_checked_at',s.last_checked_at,
+		'health',COALESCE((SELECT jsonb_build_object('status',h.status,'cpu_percent',h.cpu_percent,'memory_percent',h.memory_percent,'disk_percent',h.disk_percent,'services',h.services,'checked_at',h.checked_at) FROM server_health_snapshots h WHERE h.server_id=s.id ORDER BY h.checked_at DESC LIMIT 1),'{}'::jsonb))
+		FROM operations o JOIN ai_models m ON m.id=o.model_id JOIN servers s ON s.id=o.server_id WHERE o.id=$1 AND o.workspace_id=$2 AND o.status='summarizing'`, id, workspaceID).Scan(&threadID, &modelID, &model.BaseURL, &model.ExternalID, &ciphertext, &input.Title, &input.Plan, &input.Request, &input.Server)
+	if err == nil && len(ciphertext) > 0 {
+		model.APIKey, err = decryptModelAPIKey(s.cfg.modelKeyEncryptionKey, ciphertext)
+	}
+	if err == nil {
+		rows, queryErr := s.db.Query(ctx, `SELECT description,COALESCE(exit_code,0),stdout,stderr FROM operation_steps WHERE operation_id=$1 AND status='succeeded' ORDER BY position`, id)
+		if queryErr != nil {
+			err = queryErr
+		} else {
+			for rows.Next() {
+				var step summaryOperationStep
+				if scanErr := rows.Scan(&step.Description, &step.ExitCode, &step.Stdout, &step.Stderr); scanErr != nil {
+					err = scanErr
+					break
+				}
+				input.Steps = append(input.Steps, step)
+			}
+			if err == nil {
+				err = rows.Err()
+			}
+			rows.Close()
+		}
+	}
+	input = boundSummaryInput(input)
+	language := preferredResponseLanguage(input.Request)
+	var pending strings.Builder
+	flush := func() {
+		if pending.Len() == 0 {
+			return
+		}
+		chunk := redactSummaryOutput(pending.String())
+		pending.Reset()
+		if strings.TrimSpace(chunk) != "" {
+			dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = insertOperationEvent(dbCtx, s.db, id, "assistant.delta", uuid.Nil, map[string]any{"chunk": chunk})
+			cancel()
+		}
+	}
+	onDelta := func(chunk string) {
+		pending.WriteString(chunk)
+		if pending.Len() >= 256 {
+			flush()
+		}
+	}
+	var content string
+	var usage plannerUsage
+	if err == nil {
+		requestCtx, cancel := context.WithTimeout(ctx, s.cfg.modelRequestTimeout)
+		content, usage, err = requestOpenAISummary(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, language, input, onDelta)
+		cancel()
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		pending.Reset()
+		content = summaryFallback(language)
+		onDelta(content)
+		flush()
+		s.persistOperationSummary(id, workspaceID, threadID, modelID, content, plannerUsage{}, true)
+		return
+	}
+	flush()
+	s.persistOperationSummary(id, workspaceID, threadID, modelID, redactSummaryOutput(content), usage, false)
+}
+
+func summaryFallback(language string) string {
+	if language == "Bahasa Indonesia" {
+		return "Pemeriksaan teknis selesai, tetapi ringkasan AI tidak tersedia. Tinjau output terminal untuk melihat hasil setiap langkah."
+	}
+	return "Technical checks completed, but the AI summary is unavailable. Review terminal output for each step's results."
+}
+
+func (s *server) persistOperationSummary(id, workspaceID, threadID, modelID uuid.UUID, content string, usage plannerUsage, failed bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback(ctx)
+	messageID := uuid.New()
+	tag, err := tx.Exec(ctx, `UPDATE operations SET status='succeeded',error='',finished_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='summarizing'`, id, workspaceID)
+	if err != nil || tag.RowsAffected() != 1 {
+		return
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, messageID, threadID, content, modelID, usage.InputTokens, usage.OutputTokens)
+	if err == nil {
+		_, err = tx.Exec(ctx, `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,$5,'summary',$6,$7::bigint,$8::bigint,$7::bigint+$8::bigint,date_trunc('month',now())::date)`, uuid.New(), workspaceID, threadID, id, messageID, modelID, usage.InputTokens, usage.OutputTokens)
+	}
+	if err == nil {
+		event := "summary.completed"
+		payload := map[string]any{"message_id": messageID, "input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens}
+		if failed {
+			event = "summary.failed"
+			payload = map[string]any{"message_id": messageID}
+		}
+		err = insertOperationEvent(ctx, tx, id, event, uuid.Nil, payload)
+	}
+	if err == nil {
+		err = insertOperationEvent(ctx, tx, id, "completed", uuid.Nil, map[string]any{"status": "succeeded"})
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `UPDATE chat_threads SET updated_at=now() WHERE id=$1`, threadID)
+	}
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
+	if err != nil {
+		log.Printf("operation %s summary persistence failed: %v", id, err)
+		_, _ = s.db.Exec(context.Background(), `UPDATE operations SET status='succeeded',error='AI summary persistence failed',finished_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='summarizing'`, id, workspaceID)
+		_ = insertOperationEvent(context.Background(), s.db, id, "summary.failed", uuid.Nil, map[string]any{"chunk": summaryFallback("English")})
+		_ = insertOperationEvent(context.Background(), s.db, id, "completed", uuid.Nil, map[string]any{"status": "succeeded"})
+	}
 }
 
 func (s *server) runOperationStep(parent context.Context, client *ssh.Client, opID uuid.UUID, step operationStepResponse, total int) error {
@@ -319,13 +529,7 @@ func (s *server) runOperationStep(parent context.Context, client *ssh.Client, op
 	session.Stderr = stderr
 	done := make(chan error, 1)
 	go func() { done <- session.Run(command) }()
-	select {
-	case err = <-done:
-	case <-ctx.Done():
-		_ = session.Close()
-		<-done
-		err = ctx.Err()
-	}
+	err = waitSSHCommand(ctx, session, done)
 	stdout.Flush()
 	stderr.Flush()
 	exitCode := 0
@@ -343,6 +547,20 @@ func (s *server) runOperationStep(parent context.Context, client *ssh.Client, op
 	}
 	_ = insertOperationEvent(context.Background(), s.db, opID, "step.completed", step.ID, map[string]any{"position": step.Position, "total": total, "status": status, "exit_code": exitCode, "output_truncated": stdout.Truncated() || stderr.Truncated()})
 	return err
+}
+
+func waitSSHCommand(ctx context.Context, session *ssh.Session, done <-chan error) error {
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = session.Close()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+		return ctx.Err()
+	}
 }
 
 type eventBuffer struct {
@@ -480,7 +698,7 @@ func (s *server) operationEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, e := range events {
 			last = e.ID
-			raw, _ := json.Marshal(e.Payload)
+			raw, _ := json.Marshal(e.envelope())
 			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", e.ID, e.Type, raw)
 			flusher.Flush()
 		}
@@ -504,13 +722,29 @@ func (s *server) operationEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 type operationEventDTO struct {
-	ID      int64
-	Type    string
-	Payload json.RawMessage
+	ID        int64
+	Type      string
+	StepID    *uuid.UUID
+	CreatedAt time.Time
+	Payload   json.RawMessage
+}
+
+func (e operationEventDTO) envelope() map[string]any {
+	out := map[string]any{}
+	_ = json.Unmarshal(e.Payload, &out)
+	out["id"] = e.ID
+	out["event_type"] = e.Type
+	out["created_at"] = e.CreatedAt
+	if e.StepID != nil {
+		out["step_id"] = *e.StepID
+	} else {
+		out["step_id"] = nil
+	}
+	return out
 }
 
 func (s *server) loadEvents(ctx context.Context, opID, workspaceID uuid.UUID, last int64) ([]operationEventDTO, bool, bool, error) {
-	rows, err := s.db.Query(ctx, `SELECT e.id,e.event_type,e.payload FROM operation_events e JOIN operations o ON o.id=e.operation_id WHERE e.operation_id=$1 AND o.workspace_id=$2 AND e.id>$3 ORDER BY e.id LIMIT 201`, opID, workspaceID, last)
+	rows, err := s.db.Query(ctx, `SELECT e.id,e.event_type,e.step_id,e.created_at,e.payload FROM operation_events e JOIN operations o ON o.id=e.operation_id WHERE e.operation_id=$1 AND o.workspace_id=$2 AND e.id>$3 ORDER BY e.id LIMIT 201`, opID, workspaceID, last)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -518,7 +752,7 @@ func (s *server) loadEvents(ctx context.Context, opID, workspaceID uuid.UUID, la
 	out := []operationEventDTO{}
 	for rows.Next() {
 		var e operationEventDTO
-		if rows.Scan(&e.ID, &e.Type, &e.Payload) != nil {
+		if rows.Scan(&e.ID, &e.Type, &e.StepID, &e.CreatedAt, &e.Payload) != nil {
 			return nil, false, false, rows.Err()
 		}
 		out = append(out, e)

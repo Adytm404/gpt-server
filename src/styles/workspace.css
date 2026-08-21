@@ -363,8 +363,10 @@
 .chat-empty-state { margin: 18px auto; max-width: 520px; padding: 25px; display: flex; flex-direction: column; align-items: center; gap: 9px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; background: #ffffffa8; color: var(--muted); }
 .chat-empty-state strong { color: var(--ink); font-size: 12px; }.chat-empty-state p { margin: 0 0 5px; font-size: 9px; }
 .composer-error { margin: 0 15px 8px; }.composer-disabled-reason { margin: 0; padding: 0 15px 11px; color: var(--muted); font-size: 8px; }
+.composer-policy-scope { margin: 5px 10px 0; color: var(--muted); font-size: 7px; line-height: 1.4; }
 .plan-actions { padding: 13px 16px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--line); }
 .plan-command { display: block; margin-top: 5px; color: #68626f; font: 8px/1.5 'DM Mono',monospace; }
 .plan-step-output { display: block; margin-top: 5px; padding: 7px; border-radius: 5px; background: #f4f4f1; white-space: pre-wrap; color: #54545c; font: 8px/1.5 'DM Mono',monospace; }.plan-step-output.stderr { color: var(--red); }.operation-summary { margin: 0; padding: 13px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 9px; line-height: 1.55; }.composer-planning { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: 8px; }
 .execution-table-row { text-decoration: none; }.log-line.stderr code { color: #ef8b8b; }
 .thread-menu-blocked { display: block; max-width: 190px; padding: 8px 10px; color: var(--muted); font-size: 7px; line-height: 1.45; }
+.streamed-summary { margin-top: -12px; }.summary-cursor { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -.12em; background: var(--accent); animation: blink .8s steps(1) infinite; }

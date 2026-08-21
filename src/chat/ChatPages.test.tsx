@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage, RecentChats } from './ChatPages'
@@ -35,6 +35,54 @@ describe('real chat workspace', () => {
     expect(await screen.findByText('thread destination')).toBeInTheDocument()
     expect(requests.find(request => request.url.endsWith('/chat/threads') && request.body)?.body).toMatchObject({ server_id: 'srv-real-uuid' })
     expect(requests.find(request => request.url.endsWith('/messages'))?.body).toEqual({ content: 'Check load', policy: 'approval_required' })
+  })
+
+  it('offers only safe policies and sends exact explain_only body', async () => {
+    const requests: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input); const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      if (url.endsWith('/chat/config')) return json({ configured: true, model_id: 'model-1', monthly_token_limit: 1000, used_tokens: 0 })
+      if (url.endsWith('/servers')) return json({ servers: [server] })
+      if (url.endsWith('/chat/threads') && init?.method === 'POST') return json({ thread }, 201)
+      if (url.endsWith('/messages') && init?.method === 'POST') { requests.push(body); return json({ message: { id: 'answer-1', role: 'assistant', content: 'Stored context is healthy.' } }, 201) }
+      if (url.endsWith('/chat/threads')) return json({ threads: [] })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<div>thread destination</div>} /></Routes>)
+    await userEvent.click(await screen.findByRole('button', { name: 'Execution policy' }))
+    const options = screen.getByRole('listbox', { name: 'Execution policy options' })
+    expect(within(options).getAllByRole('option')).toHaveLength(2)
+    expect(within(options).getByText('Approval required')).toBeInTheDocument()
+    expect(within(options).getByText('Explain only')).toBeInTheDocument()
+    expect(screen.queryByText('Auto execute')).not.toBeInTheDocument()
+    await userEvent.click(within(options).getByRole('option', { name: /Explain only/ }))
+    expect(screen.getByText(/No commands will run\./)).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('Ask OpsAI'), 'Explain latest state')
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('thread destination')).toBeInTheDocument()
+    expect(requests).toEqual([{ content: 'Explain latest state', policy: 'explain_only' }])
+  })
+
+  it('renders explain_only assistant response without terminal or plan', async () => {
+    let messageLists = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/messages') && init?.method === 'POST') return json({ message: { id: 'answer-1', role: 'assistant', content: 'No commands were run.' } }, 201)
+      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: [] }) }
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    await userEvent.click(await screen.findByRole('button', { name: 'Execution policy' }))
+    await userEvent.click(screen.getByRole('option', { name: /Explain only/ }))
+    await userEvent.type(screen.getByLabelText('Ask OpsAI'), 'Explain stored context')
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(await screen.findByText('No commands were run.')).toBeInTheDocument()
+    expect(messageLists).toBeGreaterThan(1)
+    expect(screen.queryByText('SSH terminal')).not.toBeInTheDocument()
+    expect(screen.queryByText('Approve & run')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Ask OpsAI')).toBeEnabled()
   })
 
   it('shows honest empty server state', async () => {
@@ -134,6 +182,7 @@ describe('real chat workspace', () => {
     })
     renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
     await screen.findByText('SSH terminal')
+    await waitFor(() => expect(EventSourceMock.instance).toBeDefined())
     EventSourceMock.instance.onopen?.()
     EventSourceMock.instance.emit('stdout', { text: 'real output' }, '1')
     EventSourceMock.instance.emit('stdout', { text: 'second chunk' }, '2')
@@ -145,6 +194,44 @@ describe('real chat workspace', () => {
     expect(screen.queryByText(/load average: 0.84/)).not.toBeInTheDocument()
     await new Promise(resolve => window.setTimeout(resolve, 350))
     expect(operationLists).toBe(1)
+    vi.unstubAllGlobals()
+  })
+
+  it('concatenates summary deltas, shows summarizing progress, then refetches without duplicate', async () => {
+    class EventSourceMock {
+      static instance: EventSourceMock
+      onopen: (() => void) | null = null; onerror: (() => void) | null = null; listeners: Record<string, (event: MessageEvent) => void> = {}; closed = false
+      constructor() { EventSourceMock.instance = this }
+      addEventListener(type: string, listener: EventListener) { this.listeners[type] = listener as (event: MessageEvent) => void }
+      close() { this.closed = true }
+      emit(type: string, data: object, id: string) { this.listeners[type]?.({ data: JSON.stringify(data), lastEventId: id, type } as MessageEvent) }
+    }
+    vi.stubGlobal('EventSource', EventSourceMock)
+    let messageLists = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: messageLists > 1 ? [{ id: 'summary-1', role: 'assistant', content: 'Host is healthy.' }] : [] }) }
+      if (url.includes('/operations?')) return json({ operations: [{ ...operation, status: 'succeeded', steps: [{ ...operation.steps[0], status: 'succeeded' }] }] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    await screen.findByText('SSH terminal')
+    await waitFor(() => expect(EventSourceMock.instance).toBeDefined())
+    await act(async () => {
+      EventSourceMock.instance.emit('summary.started', {}, '30')
+      EventSourceMock.instance.emit('assistant.delta', { payload: { delta: 'Host is ' } }, '31')
+      EventSourceMock.instance.emit('assistant.delta', { payload: { delta: 'healthy.' } }, '32')
+    })
+    expect(screen.getByTestId('streamed-summary')).toHaveTextContent('Host is healthy.')
+    expect(screen.getByText('OpsAI sedang menjelaskan hasil...')).toBeInTheDocument()
+    expect(screen.getByText('Commands complete. Generating explanation...')).toBeInTheDocument()
+    expect(screen.getByText('100%')).toBeInTheDocument()
+    await act(async () => { EventSourceMock.instance.emit('summary.completed', { payload: { message_id: 'summary-1' } }, '33') })
+    await waitFor(() => expect(messageLists).toBeGreaterThan(1))
+    await waitFor(() => expect(screen.queryByTestId('streamed-summary')).not.toBeInTheDocument())
+    expect(screen.getAllByText('Host is healthy.')).toHaveLength(1)
+    expect(EventSourceMock.instance.closed).toBe(true)
     vi.unstubAllGlobals()
   })
 
@@ -164,7 +251,7 @@ describe('real chat workspace', () => {
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
   })
 
-  it('refetches and closes stream on backend completed event without payload status', async () => {
+  it('refetches but keeps stream open for summary after backend completed event', async () => {
     class EventSourceMock {
       static instance: EventSourceMock
       onopen: (() => void) | null = null; onerror: (() => void) | null = null; listeners: Record<string, (event: MessageEvent) => void> = {}; closed = false
@@ -188,7 +275,7 @@ describe('real chat workspace', () => {
     expect(await screen.findByText('backend chunk')).toBeInTheDocument()
     EventSourceMock.instance.emit('completed', {}, '21')
     await waitFor(() => expect(operationLists).toBeGreaterThan(1))
-    expect(EventSourceMock.instance.closed).toBe(true)
+    expect(EventSourceMock.instance.closed).toBe(false)
     vi.unstubAllGlobals()
   })
 
