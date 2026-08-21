@@ -32,7 +32,7 @@ export type ServerDTO = {
 
 export type ServerSummaryDTO = { total: number; online: number; offline: number; unknown: number }
 export type CreateServerDTO = { name: string; host: string; port: number; username: string; auth_method: 'ssh_key' | 'password'; password?: string; private_key?: string; host_fingerprint?: string; environment: string; region?: string }
-export type ConnectionTestResult = { ok: boolean; message: string; authMethod?: 'ssh_key' | 'password'; latencyMs?: number }
+export type ConnectionTestResult = { ok: boolean; message: string; authMethod?: 'ssh_key' | 'password'; latencyMs?: number; hostFingerprint?: string }
 
 export function formatUptime(seconds: number): string {
   const totalMinutes = Math.floor(Math.max(0, seconds) / 60)
@@ -64,9 +64,9 @@ function serverInput(input: CreateServerDTO) {
   return { ...fields, ...credential, ssh_user: username, region: input.region || '' }
 }
 
-function connectionResult(result: { success?: boolean; ok?: boolean; status?: string; error?: string; message?: string; auth_method?: 'ssh_key' | 'password'; latency_ms?: number }): ConnectionTestResult {
+function connectionResult(result: { success?: boolean; ok?: boolean; status?: string; error?: string; message?: string; auth_method?: 'ssh_key' | 'password'; latency_ms?: number; host_fingerprint?: string }): ConnectionTestResult {
   const ok = result.success ?? result.ok ?? ['ok', 'online', 'success', 'verified'].includes(result.status || '')
-  return { ok, message: result.error || result.message || (ok ? 'SSH connection successful' : 'SSH connection failed'), authMethod: result.auth_method, latencyMs: result.latency_ms }
+  return { ok, message: result.error || result.message || (ok ? 'SSH connection successful' : 'SSH connection failed'), authMethod: result.auth_method, latencyMs: result.latency_ms, hostFingerprint: result.host_fingerprint }
 }
 
 export const serversApi = {

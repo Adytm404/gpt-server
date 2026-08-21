@@ -317,7 +317,7 @@ func (s *server) testServer(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) testDraftServer(w http.ResponseWriter, r *http.Request) {
 	var in serverInput
-	if decodeJSON(r, &in) != nil || validateServerCreateInput(in) != nil {
+	if decodeJSON(r, &in) != nil || validateServerDraftInput(in) != nil {
 		s.writeError(w, r, 400, "invalid server fields")
 		return
 	}

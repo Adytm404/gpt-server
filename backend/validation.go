@@ -88,6 +88,27 @@ func normalizedAuthMethod(method string) string {
 	return method
 }
 
+func validateServerDraftInput(in serverInput) error {
+	if err := validateServerInput(in); err != nil {
+		return err
+	}
+	switch normalizedAuthMethod(in.AuthMethod) {
+	case authMethodSSHKey:
+		if strings.TrimSpace(in.PrivateKey) == "" || in.Password != "" {
+			return errors.New("SSH private key required")
+		}
+		_, err := ssh.ParsePrivateKey([]byte(in.PrivateKey))
+		return err
+	case authMethodPassword:
+		if strings.TrimSpace(in.Password) == "" || len(in.Password) > maxServerPassword || in.PrivateKey != "" {
+			return errors.New("SSH password required")
+		}
+		return nil
+	default:
+		return errors.New("invalid auth method")
+	}
+}
+
 func validateServerCreateInput(in serverInput) error {
 	if err := validateServerInput(in); err != nil {
 		return err

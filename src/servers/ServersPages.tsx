@@ -358,7 +358,11 @@ function AddServerModal({
       if (!result.ok) throw new Error(result.message || "SSH connection failed");
       setTestResult({ ...result, authMethod: result.authMethod || form.auth_method });
       setStep(2);
-      const server = await serversApi.create(form);
+      const serverPayload = {
+        ...form,
+        host_fingerprint: form.host_fingerprint || result.hostFingerprint || "",
+      };
+      const server = await serversApi.create(serverPayload);
       setCreated(server);
       persisted();
       setForm((current) => ({ ...current, private_key: "", password: "" }));
