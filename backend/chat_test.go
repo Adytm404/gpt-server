@@ -41,6 +41,28 @@ func TestChatMessageResponseSerializesKind(t *testing.T) {
 	}
 }
 
+func TestChatMessageResponseSerializesOptionalOperationID(t *testing.T) {
+	id := uuid.New()
+	raw, err := json.Marshal(chatMessageResponse{OperationID: &id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err = json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["operation_id"] != id.String() {
+		t.Fatalf("operation_id = %#v", out["operation_id"])
+	}
+	raw, err = json.Marshal(chatMessageResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "operation_id") {
+		t.Fatalf("nil operation_id serialized: %s", raw)
+	}
+}
+
 func TestChatMessageQueriesPersistAndScanKinds(t *testing.T) {
 	chatRaw, err := os.ReadFile("chat.go")
 	if err != nil {
@@ -52,7 +74,7 @@ func TestChatMessageQueriesPersistAndScanKinds(t *testing.T) {
 	}
 	chatSource, operationSource := string(chatRaw), string(operationsRaw)
 	for _, clause := range []string{
-		"m.role,m.kind,m.content",
+		"m.role,m.kind,m.operation_id,m.content",
 		"'user','chat'",
 		"'assistant','chat'",
 		"'assistant','plan'",
@@ -66,6 +88,34 @@ func TestChatMessageQueriesPersistAndScanKinds(t *testing.T) {
 	}
 	if strings.Index(operationSource, "runOperationStep(ctx") > strings.Index(operationSource, "s.summarizeOperation(ctx") {
 		t.Fatal("operation summary must run after command steps")
+	}
+}
+
+func TestChatMessageQueriesPersistOperationOrdering(t *testing.T) {
+	chatRaw, err := os.ReadFile("chat.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationsRaw, err := os.ReadFile("operations.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatSource, operationSource := string(chatRaw), string(operationsRaw)
+	for _, clause := range []string{
+		"m.kind,m.operation_id,m.content",
+		"&x.Kind, &x.OperationID, &x.Content",
+		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content) VALUES($1,$2,$3,'user','chat',$4)",
+		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,'assistant','plan',$4,$5,$6,$7)",
+		"OperationID: &opID",
+		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content) VALUES($1,$2,NULL,'user','chat',$3)",
+		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,NULL,'assistant','chat',$3,$4,$5,$6)",
+	} {
+		if !strings.Contains(chatSource, clause) {
+			t.Errorf("chat operation ordering source missing %q", clause)
+		}
+	}
+	if !strings.Contains(operationSource, "INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,'assistant','result',$4,$5,$6,$7)") {
+		t.Error("operation summary does not persist its operation_id")
 	}
 }
 

@@ -476,7 +476,7 @@ func (s *server) persistOperationSummary(id, workspaceID, threadID, modelID uuid
 	if err != nil || tag.RowsAffected() != 1 {
 		return
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO chat_messages(id,thread_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant','result',$3,$4,$5,$6)`, messageID, threadID, content, modelID, usage.InputTokens, usage.OutputTokens)
+	_, err = tx.Exec(ctx, `INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,'assistant','result',$4,$5,$6,$7)`, messageID, threadID, id, content, modelID, usage.InputTokens, usage.OutputTokens)
 	if err == nil {
 		_, err = tx.Exec(ctx, `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,$5,'summary',$6,$7::bigint,$8::bigint,$7::bigint+$8::bigint,date_trunc('month',now())::date)`, uuid.New(), workspaceID, threadID, id, messageID, modelID, usage.InputTokens, usage.OutputTokens)
 	}

@@ -170,6 +170,71 @@ describe('real chat workspace', () => {
     expect(card.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('renders two interleaved operations old-to-new with only latest approval controls', async () => {
+    const older = {
+      ...operation,
+      id: 'op-older',
+      title: 'Inspect disk',
+      status: 'pending_approval',
+      created_at: '2026-08-21T10:00:02Z',
+      steps: [{ id: 'disk-step', title: 'Read disk usage', status: 'pending', command: 'df -h' }],
+    }
+    const latest = {
+      ...operation,
+      id: 'op-latest',
+      title: 'Inspect memory',
+      status: 'pending_approval',
+      created_at: '2026-08-21T10:05:02Z',
+      steps: [{ id: 'memory-step', title: 'Read memory usage', status: 'pending', command: 'free -m' }],
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [
+        { id: 'user-1', role: 'user', content: 'Check disk', kind: 'chat', operation_id: older.id, created_at: '2026-08-21T10:00:00Z' },
+        { id: 'plan-1', role: 'assistant', content: 'Hidden disk plan', kind: 'plan', operation_id: older.id, created_at: '2026-08-21T10:00:01Z' },
+        { id: 'result-1', role: 'assistant', content: 'Disk is healthy', kind: 'result', operation_id: older.id, created_at: '2026-08-21T10:00:03Z' },
+        { id: 'chat-1', role: 'assistant', content: 'What should I inspect next?', kind: 'chat', created_at: '2026-08-21T10:00:04Z' },
+        { id: 'user-2', role: 'user', content: 'Check memory', kind: 'chat', operation_id: latest.id, created_at: '2026-08-21T10:05:00Z' },
+        { id: 'plan-2', role: 'assistant', content: 'Hidden memory plan', kind: 'plan', operation_id: latest.id, created_at: '2026-08-21T10:05:01Z' },
+      ] })
+      if (url.includes('/operations?')) return json({ operations: [latest, older] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+
+    const conversation = (await screen.findByText('Check disk')).closest<HTMLElement>('.conversation')!
+    const ordered = within(conversation).getAllByTestId(/^(message|operation-op)/).map(item => item.getAttribute('data-testid'))
+    expect(ordered).toEqual(['message-user-1', 'operation-op-older', 'message-result-1', 'message-chat-1', 'message-user-2', 'operation-op-latest'])
+    expect(screen.queryByText('Hidden disk plan')).not.toBeInTheDocument()
+    expect(screen.queryByText('Hidden memory plan')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Approve & run' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Reject' })).toHaveLength(1)
+    expect(screen.getByTestId('operation-op-latest')).toContainElement(screen.getByRole('button', { name: 'Approve & run' }))
+    expect(screen.getByText('SSH terminal')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['planning', ['done', 'current', 'pending', 'pending', 'pending']],
+    ['pending_approval', ['done', 'done', 'current', 'pending', 'pending']],
+    ['running', ['done', 'done', 'done', 'current', 'pending']],
+    ['summarizing', ['done', 'done', 'done', 'done', 'current']],
+    ['succeeded', ['done', 'done', 'done', 'done', 'done']],
+  ])('shows five operation stages for %s', async (status, states) => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [{ id: 'm1', role: 'user', content: 'Inspect load', kind: 'chat', operation_id: operation.id, created_at: '2026-08-21T10:00:00Z' }] })
+      if (url.includes('/operations?')) return json({ operations: [{ ...operation, status, created_at: '2026-08-21T10:00:01Z' }] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+
+    const stages = within(await screen.findByTestId('operation-stages')).getAllByRole('listitem')
+    expect(stages.map(stage => stage.getAttribute('data-state'))).toEqual(states)
+    for (const label of ['Request received', 'AI determining action', 'Flow ready', 'Executing', 'Explanation']) expect(within(screen.getByTestId('operation-stages')).getByText(label)).toBeInTheDocument()
+  })
+
   it('renders explain_only assistant response without terminal or plan', async () => {
     let messageLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

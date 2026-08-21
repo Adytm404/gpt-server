@@ -28,12 +28,12 @@ describe('chat event normalization', () => {
   it('maps message kind and defaults legacy messages to chat', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ messages: [
       { id: 'm1', role: 'assistant', content: 'Legacy response' },
-      { id: 'm2', role: 'assistant', content: 'Execution result', kind: 'result' },
+      { id: 'm2', role: 'assistant', content: 'Execution result', kind: 'result', operation_id: 'op-2' },
     ] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
     await expect(chatApi.listMessages('t1')).resolves.toMatchObject([
       { id: 'm1', kind: 'chat' },
-      { id: 'm2', kind: 'result' },
+      { id: 'm2', kind: 'result', operationId: 'op-2' },
     ])
   })
 

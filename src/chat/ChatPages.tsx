@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, Fragment, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Command, Download, MessageSquare, MoreHorizontal, Play, Plus, Server as ServerIcon, ShieldCheck, Sparkles, Square, Terminal } from 'lucide-react'
 import { chatApi, operationEventFromMessage, operationEventsUrl, reduceOperationEvents, type ChatConfig, type ChatMessage, type ChatPolicy, type ChatThread, type Operation, type OperationEvent } from '../api/chat'
@@ -200,17 +200,73 @@ function useOperationEvents(operation: Operation | null, onState: () => void) {
   return { events, connection, summaryText, summaryMessageId, summaryPhase }
 }
 
-function OperationCard({ operation, summarizing, mutate }: { operation: Operation; summarizing: boolean; mutate: (action: 'approve' | 'reject' | 'cancel') => Promise<void> }) {
+const operationStages = ['Request received', 'AI determining action', 'Flow ready', 'Executing', 'Explanation'] as const
+
+function operationStageStates(status: string, summarizing: boolean): Array<'done' | 'current' | 'pending'> {
+  if (summarizing || ['summarizing', 'summary_started'].includes(status)) return ['done', 'done', 'done', 'done', 'current']
+  if (['succeeded', 'completed'].includes(status)) return ['done', 'done', 'done', 'done', 'done']
+  if (['running', 'executing', 'failed', 'cancelled', 'canceled'].includes(status)) return ['done', 'done', 'done', 'current', 'pending']
+  if (['approved', 'queued'].includes(status)) return ['done', 'done', 'done', 'current', 'pending']
+  if (approvalStatuses.has(status) || ['planned', 'plan_ready', 'rejected'].includes(status)) return ['done', 'done', 'current', 'pending', 'pending']
+  return ['done', 'current', 'pending', 'pending', 'pending']
+}
+
+function OperationCard({ operation, summarizing, mutate }: { operation: Operation; summarizing: boolean; mutate?: (action: 'approve' | 'reject' | 'cancel') => Promise<void> }) {
   const completed = operation.steps.filter(step => ['completed', 'succeeded', 'success'].includes(step.status)).length
   const progress = summarizing ? 100 : operation.steps.length ? Math.round(completed / operation.steps.length * 100) : 0
   const pendingApproval = approvalStatuses.has(operation.status)
+  const stageStates = operationStageStates(operation.status, summarizing)
   return <div className="plan-card"><div className="plan-head"><div><i><Command size={17} /></i><span><strong>{operation.title}</strong><small>{operation.steps.length} steps / {operation.status.replaceAll('_', ' ')}</small></span></div><span className={cn('risk-badge', finalStatuses.has(operation.status) && 'complete')}><ShieldCheck size={13} /> {operation.status.replaceAll('_', ' ')}</span></div>
+    <ol className="operation-stages" data-testid="operation-stages">{operationStages.map((stage, index) => <li key={stage} data-state={stageStates[index]} className={stageStates[index]}><i>{stageStates[index] === 'done' ? <Check size={10} /> : index + 1}</i><span>{stage}</span></li>)}</ol>
     {(busyStatuses.has(operation.status) || summarizing) && <div className="operation-progress"><div><span>Operation progress</span><b>{progress}%</b></div><i><b style={{ width: `${progress}%` }} /></i><small>{summarizing ? 'Commands complete. Generating explanation...' : `${completed} of ${operation.steps.length} steps completed`}</small></div>}
     {operation.summary && <p className="operation-summary">{operation.summary}</p>}
     <div className="plan-steps">{operation.steps.map((step, index) => <div key={step.id} className={cn(['completed', 'succeeded', 'success'].includes(step.status) && 'done', step.status === 'running' && 'running')}><i>{['completed', 'succeeded', 'success'].includes(step.status) ? <Check size={13} /> : index + 1}</i><span>{step.title}{step.command && <code className="plan-command">{step.command}</code>}{step.stdout && <code className="plan-step-output">{step.stdout}</code>}{step.stderr && <code className="plan-step-output stderr">{step.stderr}</code>}</span><b>{step.exitCode != null ? `${step.status} (${step.exitCode})` : step.status}</b></div>)}</div>
     {operation.error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {operation.error}</div>}
-    {pendingApproval && <div className="plan-actions"><button className="button secondary" onClick={() => void mutate('reject')}>Reject</button><button className="button dark" onClick={() => void mutate('approve')}><Play size={13} /> Approve & run</button></div>}
+    {pendingApproval && mutate && <div className="plan-actions"><button className="button secondary" onClick={() => void mutate('reject')}>Reject</button><button className="button dark" onClick={() => void mutate('approve')}><Play size={13} /> Approve & run</button></div>}
   </div>
+}
+
+type TimelineItem = { type: 'message'; message: ChatMessage; time: number; order: number } | { type: 'operation'; operation: Operation; time: number; order: number }
+
+function timestamp(value?: string) {
+  const parsed = value ? new Date(value).getTime() : Number.NaN
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
+}
+
+function buildTimeline(messages: ChatMessage[], operations: Operation[], hiddenMessageId?: string) {
+  const visibleMessages = messages.filter(message => message.kind !== 'plan' && message.id !== hiddenMessageId)
+  const planTimes = new Map<string, number>()
+  messages.forEach(message => {
+    if (message.kind !== 'plan' || !message.operationId) return
+    planTimes.set(message.operationId, Math.max(planTimes.get(message.operationId) ?? Number.NEGATIVE_INFINITY, timestamp(message.createdAt)))
+  })
+  const items: TimelineItem[] = visibleMessages.map((message, order) => ({ type: 'message', message, time: timestamp(message.createdAt), order }))
+  operations.forEach((operation, index) => {
+    const associatedRequestTimes = messages
+      .filter(message => message.operationId === operation.id && (message.role === 'user' || message.kind === 'plan'))
+      .map(message => timestamp(message.createdAt))
+      .filter(Number.isFinite)
+    const explicitAnchor = Math.max(timestamp(operation.createdAt), planTimes.get(operation.id) ?? Number.NEGATIVE_INFINITY, ...associatedRequestTimes)
+    items.push({ type: 'operation', operation, time: Number.isFinite(explicitAnchor) ? explicitAnchor : timestamp(operation.createdAt), order: messages.length + index })
+  })
+  items.sort((left, right) => left.time - right.time || left.order - right.order)
+
+  // Explicit associations override ambiguous equal/missing timestamps.
+  for (const operation of operations) {
+    const operationIndex = items.findIndex(item => item.type === 'operation' && item.operation.id === operation.id)
+    if (operationIndex < 0) continue
+    const requestIndexes = items.flatMap((item, index) => item.type === 'message' && item.message.operationId === operation.id && item.message.role === 'user' ? [index] : [])
+    const resultIndexes = items.flatMap((item, index) => item.type === 'message' && item.message.operationId === operation.id && item.message.kind === 'result' ? [index] : [])
+    const afterRequest = requestIndexes.length ? Math.max(...requestIndexes) + 1 : operationIndex
+    const beforeResult = resultIndexes.length ? Math.min(...resultIndexes) : items.length
+    if (operationIndex < afterRequest || operationIndex > beforeResult) {
+      const [item] = items.splice(operationIndex, 1)
+      const adjustedRequest = operationIndex < afterRequest ? afterRequest - 1 : afterRequest
+      const adjustedResult = resultIndexes.length ? items.findIndex(candidate => candidate.type === 'message' && candidate.message.operationId === operation.id && candidate.message.kind === 'result') : items.length
+      items.splice(Math.min(adjustedRequest, adjustedResult < 0 ? items.length : adjustedResult), 0, item)
+    }
+  }
+  return items
 }
 
 function ExecutionPanel({ operation, events, connection, cancel }: { operation: Operation; events: OperationEvent[]; connection: string; cancel: () => Promise<void> }) {
@@ -233,7 +289,7 @@ export function ChatThreadPage() {
   const { refresh: refreshThreads } = useChatThreads()
   const [thread, setThread] = useState<ChatThread | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [operation, setOperation] = useState<Operation | null>(null)
+  const [operations, setOperations] = useState<Operation[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [menu, setMenu] = useState(false)
@@ -243,6 +299,7 @@ export function ChatThreadPage() {
   const loadGeneration = useRef(0)
   const pendingLocation = useRef(location.state as { prompt?: string; policy?: ChatPolicy } | null)
   const endRef = useRef<HTMLDivElement>(null)
+  const renderedItems = useRef('')
   currentId.current = id
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const load = useCallback(async () => {
@@ -251,11 +308,20 @@ export function ChatThreadPage() {
     try {
       const [nextThread, nextMessages, operations] = await Promise.all([chatApi.getThread(requestedId), chatApi.listMessages(requestedId), chatApi.listOperations({ threadId: requestedId })])
       if (!mounted.current || currentId.current !== requestedId || loadGeneration.current !== generation) return
-      setThread(nextThread); setMessages(nextMessages); setOperation(operations[0] || null); setError('')
+      setThread(nextThread); setMessages(nextMessages); setOperations(operations)
+      setPending(current => current && nextMessages.some(message => message.role === 'user' && message.content === current.content) && operations.length ? null : current)
+      setError('')
     } catch (caught) { if (mounted.current && currentId.current === requestedId && loadGeneration.current === generation) setError(caught instanceof Error ? caught.message : 'Unable to load chat') }
     finally { if (mounted.current && currentId.current === requestedId && loadGeneration.current === generation) setLoading(false) }
   }, [id])
   useEffect(() => { setLoading(true); void load() }, [load])
+  const operation = operations.reduce<Operation | null>((latest, candidate) => {
+    if (!latest) return candidate
+    const latestTime = timestamp(latest.createdAt)
+    const candidateTime = timestamp(candidate.createdAt)
+    if (!Number.isFinite(latestTime) && !Number.isFinite(candidateTime)) return latest
+    return candidateTime > latestTime ? candidate : latest
+  }, null)
   const { events, connection, summaryText, summaryMessageId, summaryPhase } = useOperationEvents(operation, () => { void load() })
   const mutate = async (action: 'approve' | 'reject' | 'cancel') => {
     if (!operation) return
@@ -272,7 +338,7 @@ export function ChatThreadPage() {
     setPending(optimistic); setError('')
     try {
       const result = await chatApi.sendMessage(id, { content, policy })
-      if (result.operation && mounted.current && currentId.current === id) setOperation(result.operation)
+      if (result.operation && mounted.current && currentId.current === id) setOperations(current => [result.operation!, ...current.filter(item => item.id !== result.operation!.id)])
       await load(); await refreshThreads()
       if (mounted.current && currentId.current === id) setPending(null)
     } catch (caught) {
@@ -290,8 +356,10 @@ export function ChatThreadPage() {
     void followUp(state.prompt, state.policy).catch(caught => setError(caught instanceof Error ? caught.message : 'Unable to send message'))
   }, [loading, thread?.id])
   useEffect(() => {
-    if (pending || summaryPhase === 'summarizing' || messages.some(message => message.kind === 'result')) endRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'end' })
-  }, [pending, summaryPhase, messages])
+    const itemIds = `${messages.map(message => message.id).join(',')}|${operations.map(item => item.id).join(',')}|${pending?.id || ''}|${summaryPhase !== 'idle' ? 'summary' : ''}`
+    if (itemIds !== renderedItems.current) endRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'end' })
+    renderedItems.current = itemIds
+  }, [messages, operations, pending?.id, summaryPhase])
   const rename = async () => { if (!thread) return; const title = window.prompt('Thread title', thread.title)?.trim(); if (!title) return; await chatApi.updateThread(id, { title, status: 'active' }); setMenu(false); await load(); await refreshThreads() }
   const archive = async () => { if (!thread || busy) return; const title = thread.title; await chatApi.updateThread(id, { title, status: 'archived' }); await refreshThreads(); navigate('/chat') }
   const remove = async () => { if (busy) return; if (!window.confirm('Delete this chat permanently?')) return; await chatApi.deleteThread(id); await refreshThreads(); navigate('/chat') }
@@ -300,17 +368,14 @@ export function ChatThreadPage() {
   const busy = operation ? busyStatuses.has(operation.status) || approvalStatuses.has(operation.status) || summaryPhase === 'summarizing' : false
   const summaryPersisted = messages.some(message => message.role === 'assistant' && ((summaryMessageId && message.id === summaryMessageId) || (summaryText && message.content === summaryText)))
   const showStreamedSummary = summaryPhase !== 'idle' && !summaryPersisted && (summaryPhase === 'summarizing' || Boolean(summaryText))
-  const chronological = [...messages].sort((left, right) => (left.createdAt && right.createdAt ? new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() : 0))
-  const chatMessages = chronological.filter(message => message.kind === 'chat')
-  const resultMessages = chronological.filter(message => message.kind === 'result' && (!summaryMessageId || message.id !== summaryMessageId || !showStreamedSummary))
-  const renderMessage = (message: ChatMessage) => <div className={cn('message', message.role === 'user' ? 'user-message right-message' : 'ai-message left-message', message.kind === 'result' && 'result-message')} key={message.id}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div><p>{message.content}</p>{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>
+  const timeline = buildTimeline(messages, operations, showStreamedSummary ? summaryMessageId : undefined)
+  const renderMessage = (message: ChatMessage) => <div className={cn('message', message.role === 'user' ? 'user-message right-message' : 'ai-message left-message', message.kind === 'result' && 'result-message')} key={message.id} data-testid={`message-${message.id}`}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div><p>{message.content}</p>{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>
+  const renderStreamedSummary = () => <div className="message ai-message left-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI sedang menjelaskan hasil...</span>}</div><p>{summaryText}{summaryPhase === 'summarizing' && <i className="summary-cursor" aria-hidden="true" />}</p></div></div>
   return <div className="thread-layout page-enter"><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div><div className="thread-menu"><button className="icon-button bordered" onClick={() => setMenu(value => !value)} aria-label="Thread actions"><MoreHorizontal size={18} /></button>{menu && <div><button onClick={() => void rename()}>Rename</button>{busy ? <span className="thread-menu-blocked">Cancel operation first to archive or delete.</span> : <><button onClick={() => void archive()}>Archive</button><button className="danger" onClick={() => void remove()}>Delete</button></>}</div>}</div></div>
     {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
-    <div className="conversation">{messages.length === 0 && !operation && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{chatMessages.map(renderMessage)}
+    <div className="conversation">{messages.length === 0 && operations.length === 0 && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{timeline.map(item => item.type === 'message' ? renderMessage(item.message) : <Fragment key={item.operation.id}><div className="message ai-message left-message operation-message" data-testid={`operation-${item.operation.id}`}><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={item.operation} summarizing={item.operation.id === operation?.id && summaryPhase === 'summarizing'} mutate={item.operation.id === operation?.id ? mutate : undefined} /></div></div>{showStreamedSummary && item.operation.id === operation?.id && renderStreamedSummary()}</Fragment>)}
     {pending && <><div className="message user-message right-message" key={pending.id}><div className="message-avatar">YOU</div><div className="message-content"><div className="message-meta"><strong>You</strong><span>now</span></div><p>{pending.content}</p><span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span></div></div><div className="message ai-message left-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong><span className="tiny-spinner" /></div><p>{pending.policy === 'explain_only' ? 'OpsAI sedang menganalisis snapshot server...' : 'OpsAI sedang memahami permintaan dan menentukan langkah...'}</p></div></div></>}
-    {operation && <div className="message ai-message left-message operation-message"><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={operation} summarizing={summaryPhase === 'summarizing'} mutate={mutate} /></div></div>}
-    {showStreamedSummary && <div className="message ai-message left-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI sedang menjelaskan hasil...</span>}</div><p>{summaryText}{summaryPhase === 'summarizing' && <i className="summary-cursor" aria-hidden="true" />}</p></div></div>}
-    {resultMessages.map(renderMessage)}<div ref={endRef} /></div>
+    <div ref={endRef} /></div>
     <div className="thread-composer"><Composer compact servers={[]} selectedServer={thread.serverId} onSubmit={followUp} disabled={busy || Boolean(pending)} disabledReason={busy ? `Follow-up unavailable while operation is ${operation?.status.replaceAll('_', ' ')}.` : ''} /></div></section>
     {operation && <ExecutionPanel operation={operation} events={events} connection={connection} cancel={() => mutate('cancel')} />}
   </div>

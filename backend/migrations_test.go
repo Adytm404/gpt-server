@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql", "012_operation_summaries.sql", "013_llm_intent_routing.sql", "014_chat_message_kind.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql", "012_operation_summaries.sql", "013_llm_intent_routing.sql", "014_chat_message_kind.sql", "015_chat_message_operation.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,37 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestChatMessageOperationMigration(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/015_chat_message_operation.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{
+		"ADD COLUMN IF NOT EXISTS operation_id uuid",
+		"DROP CONSTRAINT IF EXISTS chat_messages_operation_id_fkey",
+		"FOREIGN KEY (operation_id) REFERENCES operations(id) ON DELETE SET NULL",
+		"FROM token_usage tu",
+		"tu.message_id = cm.id",
+		"tu.operation_id IS NOT NULL",
+		"tu.phase IN ('planning','summary')",
+		"FROM operation_events e",
+		"e.event_type = 'planning'",
+		"(e.payload->>'message_id')::uuid = cm.id",
+		"CREATE INDEX IF NOT EXISTS chat_messages_thread_operation_created_idx ON chat_messages(thread_id, operation_id, created_at)",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("015 migration missing %q", clause)
+		}
+	}
+	addColumn := strings.Index(content, "ADD COLUMN IF NOT EXISTS operation_id uuid")
+	backfill := strings.Index(content, "UPDATE chat_messages cm")
+	foreignKey := strings.Index(content, "FOREIGN KEY (operation_id)")
+	if addColumn < 0 || backfill < addColumn || foreignKey < backfill {
+		t.Fatal("015 must add column, backfill, then add foreign key")
 	}
 }
 
