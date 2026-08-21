@@ -15,6 +15,7 @@ import { API_URL } from './api/client'
 import ApiPricingPage from './pricing/PricingPage'
 import { ServersPage as ApiServersPage, ServerDetailPage as ApiServerDetailPage } from './servers/ServersPages'
 import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage as ApiExecutionsPage, RecentChats, WorkspaceAIUsage } from './chat/ChatPages'
+import { SettingsPage, ProfilePage } from './settings/SettingsPages'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
 
@@ -151,11 +152,44 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
 function Topbar({ menu }: { menu: () => void }) {
   const location = useLocation()
   const { session } = useSession()
+  const [notifOpen, setNotifOpen] = useState(false)
+  const notifRoot = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const closeNotif = (event: MouseEvent) => {
+      if (notifRoot.current && !notifRoot.current.contains(event.target as Node)) {
+        setNotifOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', closeNotif)
+    return () => document.removeEventListener('mousedown', closeNotif)
+  }, [])
+
   const adminMode = location.pathname.startsWith('/admin')
   const section = location.pathname.startsWith('/admin') ? 'Platform admin' : location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
   return <header className="topbar">
     <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button>{adminMode ? <span className="workspace-picker admin-context"><ShieldCheck size={14} /> Platform control</span> : <span className="workspace-picker workspace-context"><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'}</span>}<span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
-    <div className="topbar-actions">{adminMode ? <NavLink to="/chat" className="button secondary compact"><ArrowLeft size={16} /> <span>Workspace</span></NavLink> : <NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink>}</div>
+    <div className="topbar-actions" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      {adminMode ? <NavLink to="/chat" className="button secondary compact"><ArrowLeft size={16} /> <span>Workspace</span></NavLink> : <NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink>}
+      <div className="topbar-notifications" ref={notifRoot} style={{ position: 'relative' }}>
+        <button className="icon-button bordered" aria-label="Notifications" onClick={() => setNotifOpen(open => !open)}>
+          <Bell size={17} />
+          <span className="notification-dot" />
+        </button>
+        {notifOpen && (
+          <div className="tool-menu" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 290, zIndex: 60, bottom: 'auto' }}>
+            <header><span>Notifications</span><small>Live</small></header>
+            <div style={{ padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 11 }}>
+                <CheckCircle2 size={15} style={{ color: 'var(--green)', flexShrink: 0, marginTop: 2 }} />
+                <div><b>System healthy</b><small style={{ display: 'block', color: 'var(--muted)', fontSize: 10 }}>All operations and agent sessions nominal.</small></div>
+              </div>
+            </div>
+            <footer><ShieldCheck size={12} /> Real-time operational alerts</footer>
+          </div>
+        )}
+      </div>
+    </div>
   </header>
 }
 
@@ -548,40 +582,6 @@ function ExecutionPanel({ active, logs, complete, server, stopped, onStop }: { a
 
 function ExecutionsPage() {
   return <div className="content-page page-enter"><PageHeading eyebrow="Operations" title="Executions" description="Every command, approval, and output in one immutable timeline." /><div className="stats-strip three"><MiniStat label="Last 24 hours" value="18" detail="executions" icon={Terminal} /><MiniStat label="Success rate" value="94%" detail="17 succeeded" icon={CheckCircle2} /><MiniStat label="Avg. duration" value="8.4s" detail="all servers" icon={Clock3} /></div><div className="execution-table"><div className="execution-table-head"><span>Operation</span><span>Server</span><span>Status</span><span>Duration</span><span>Created</span></div>{['Health and resource inspection', 'Inspect nginx error logs', 'Restart worker service', 'Check failed systemd units', 'List Docker containers'].map((name, index) => <div className="execution-table-row" key={name}><span><i><Terminal size={16} /></i><span><strong>{name}</strong><small>{index === 2 ? 'Manual command' : 'OpsAI execution'}</small></span></span><span>{index % 2 ? 'Worker Primary' : 'Production API'}</span><span><b className={cn('table-status', index === 2 && 'failed')}><i />{index === 2 ? 'Failed' : 'Succeeded'}</b></span><span>{[4.2, 2.8, 1.1, 3.6, 0.8][index]}s</span><span>{index === 0 ? '2 min ago' : `${index + 1}h ago`}</span></div>)}</div></div>
-}
-
-function Toggle({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
-  return <button className={cn('setting-toggle', checked && 'active')} role="switch" aria-checked={checked} onClick={() => onChange(!checked)}><i /></button>
-}
-
-function SettingsPage() {
-  const [tab, setTab] = useState('General')
-  const [approval, setApproval] = useState(true)
-  const [notifyFailure, setNotifyFailure] = useState(true)
-  const [notifyComplete, setNotifyComplete] = useState(false)
-  const [hostCheck, setHostCheck] = useState(true)
-  const [saved, setSaved] = useState(false)
-  const save = () => { setSaved(true); window.setTimeout(() => setSaved(false), 1800) }
-  return <div className="account-page page-enter"><div className="account-heading"><div><span className="page-eyebrow">Workspace control</span><h1>Settings</h1><p>Configure how Northstar Ops connects, approves, and reports.</p></div><button className="button dark" onClick={save}>{saved ? <><Check size={15} /> Saved</> : 'Save changes'}</button></div><div className="account-layout"><aside className="account-tabs">{['General', 'Execution', 'Notifications', 'Security'].map(item => <button className={tab === item ? 'active' : ''} onClick={() => setTab(item)} key={item}>{item}</button>)}</aside><section className="account-content">
-    {tab === 'General' && <><SettingsSection title="Workspace" description="Identity and regional defaults for this operational workspace."><div className="settings-form two"><label><span>Workspace name</span><input defaultValue="Northstar Ops" /></label><label><span>Default region</span><select defaultValue="Singapore (SGP)"><option>Singapore (SGP)</option><option>Frankfurt (FRA)</option><option>US East (IAD)</option></select></label><label className="wide"><span>Workspace slug</span><div className="input-prefix"><i>opsai.cloud/</i><input defaultValue="northstar-ops" /></div></label></div></SettingsSection><SettingsSection title="Interface" description="Set defaults for dates, logs, and operational output."><div className="settings-form two"><label><span>Timezone</span><select defaultValue="Asia/Jakarta"><option>Asia/Jakarta</option><option>Asia/Singapore</option><option>UTC</option></select></label><label><span>Log density</span><select defaultValue="Comfortable"><option>Comfortable</option><option>Compact</option></select></label></div></SettingsSection></>}
-    {tab === 'Execution' && <><SettingsSection title="Approval policy" description="Control when generated commands need human confirmation."><SettingRow icon={ShieldCheck} title="Require approval" description="Every execution plan waits for explicit approval before SSH commands run." control={<Toggle checked={approval} onChange={setApproval} />} /><SettingRow icon={Clock3} title="Approval timeout" description="Pending plans expire automatically after this period." control={<select defaultValue="15 minutes"><option>15 minutes</option><option>30 minutes</option><option>1 hour</option></select>} /></SettingsSection><SettingsSection title="Command guardrails" description="Workspace-wide restrictions applied before execution."><SettingRow icon={Terminal} title="Default mode" description="Start every new operation in read-only mode." control={<span className="setting-badge">Read only</span>} /><SettingRow icon={AlertTriangle} title="Blocked patterns" description="Destructive commands require elevated policy approval." control={<button className="text-button" onClick={() => openDemo('rules','Command guardrails','12 workspace rules')}>Manage 12 rules</button>} /></SettingsSection></>}
-    {tab === 'Notifications' && <><SettingsSection title="Operational alerts" description="Choose which execution events reach your team."><SettingRow icon={AlertTriangle} title="Failed executions" description="Notify workspace members when an operation exits with an error." control={<Toggle checked={notifyFailure} onChange={setNotifyFailure} />} /><SettingRow icon={CheckCircle2} title="Completed executions" description="Notify when approved operations finish successfully." control={<Toggle checked={notifyComplete} onChange={setNotifyComplete} />} /></SettingsSection><SettingsSection title="Delivery" description="Routes used for workspace notifications."><SettingRow icon={Bell} title="Email digest" description="Daily summary sent to arya@northstar.dev at 09:00." control={<button className="text-button" onClick={() => openDemo('email','Configure email digest','Daily operational summary')}>Configure</button>} /><SettingRow icon={Zap} title="Slack" description="No channel connected yet." control={<button className="button secondary compact" onClick={() => openDemo('oauth','Connect Slack','Route alerts to your team channel')}>Connect</button>} /></SettingsSection></>}
-    {tab === 'Security' && <><SettingsSection title="SSH security" description="Policies used when servers establish trusted access."><SettingRow icon={ShieldCheck} title="Strict host verification" description="Reject connections when a known host fingerprint changes." control={<Toggle checked={hostCheck} onChange={setHostCheck} />} /><SettingRow icon={KeyRound} title="Key rotation" description="Rotate managed workspace keys every 90 days." control={<select defaultValue="90 days"><option>30 days</option><option>90 days</option><option>180 days</option></select>} /></SettingsSection><SettingsSection title="Data retention" description="Control operational evidence stored in this workspace."><SettingRow icon={History} title="Execution history" description="Plans, commands, and output are retained for audit." control={<select defaultValue="90 days"><option>30 days</option><option>90 days</option><option>1 year</option></select>} /><SettingRow icon={Database} title="Export workspace data" description="Generate an encrypted archive of workspace records." control={<button className="button secondary compact" onClick={() => openDemo('download','Export workspace data','opsai-workspace-export.zip')}><Download size={14} /> Export</button>} /></SettingsSection></>}
-  </section></div></div>
-}
-
-function SettingsSection({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
-  return <section className="settings-section"><header><h2>{title}</h2><p>{description}</p></header><div>{children}</div></section>
-}
-
-function SettingRow({ icon: Icon, title, description, control }: { icon: typeof Settings; title: string; description: string; control: React.ReactNode }) {
-  return <div className="setting-row"><i><Icon size={16} /></i><span><b>{title}</b><small>{description}</small></span><div>{control}</div></div>
-}
-
-function ProfilePage() {
-  const [saved, setSaved] = useState(false)
-  const save = () => { setSaved(true); window.setTimeout(() => setSaved(false), 1800) }
-  return <div className="account-page profile-page page-enter"><div className="account-heading"><div><span className="page-eyebrow">Personal account</span><h1>Profile</h1><p>Manage your identity and personal operational preferences.</p></div><button className="button dark" onClick={save}>{saved ? <><Check size={15} /> Saved</> : 'Save profile'}</button></div><div className="profile-grid"><section className="profile-identity"><div className="profile-avatar">AR<button aria-label="Change avatar" onClick={() => openDemo('avatar','Choose profile image','Select a preset or upload an image.')}><UserRound size={13} /></button></div><h2>Aria Rahman</h2><p>Platform engineer</p><span><i /> Active now</span><div className="profile-meta"><p><small>WORKSPACE ROLE</small><b>Owner</b></p><p><small>MEMBER SINCE</small><b>February 2026</b></p><p><small>LAST SIGN IN</small><b>Today, 14:18</b></p></div></section><div className="profile-main"><SettingsSection title="Personal information" description="Used in approvals, execution history, and team activity."><div className="settings-form two"><label><span>Full name</span><input defaultValue="Aria Rahman" /></label><label><span>Display name</span><input defaultValue="Aria" /></label><label><span>Email address</span><input type="email" defaultValue="arya@northstar.dev" /></label><label><span>Job title</span><input defaultValue="Platform engineer" /></label></div></SettingsSection><SettingsSection title="Preferences" description="Personal defaults applied only to your account."><div className="settings-form two"><label><span>Timezone</span><select defaultValue="Asia/Jakarta"><option>Asia/Jakarta</option><option>Asia/Singapore</option><option>UTC</option></select></label><label><span>Command output</span><select defaultValue="Detailed"><option>Detailed</option><option>Condensed</option></select></label></div></SettingsSection><SettingsSection title="Account security" description="Authentication and active access to your account."><SettingRow icon={KeyRound} title="Password" description="Last changed 42 days ago." control={<button className="text-button" onClick={() => openDemo('password','Change password','Protect your account with a new password.')}>Change password</button>} /><SettingRow icon={ShieldCheck} title="Two-factor authentication" description="Authenticator app protects this account." control={<span className="setting-badge success">Enabled</span>} /><SettingRow icon={Terminal} title="Active sessions" description="2 browsers currently signed in." control={<button className="text-button" onClick={() => openDemo('sessions','Active sessions','Review devices signed into your account.')}>Review sessions</button>} /></SettingsSection></div></div></div>
 }
 
 function PlaceholderPage() {

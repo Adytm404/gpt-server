@@ -87,7 +87,7 @@ func workspaceCan(role, action string) bool {
 	case "owner":
 		return true
 	case "operator":
-		return action == "read" || action == "test" || action == "health" || action == "operate"
+		return action == "read" || action == "test" || action == "health" || action == "operate" || action == "settings"
 	case "viewer":
 		return action == "read"
 	default:

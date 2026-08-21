@@ -239,6 +239,7 @@ func (s *server) routes() http.Handler {
 			r.Route("/servers", s.serverRoutes)
 			r.Route("/chat", s.chatRoutes)
 			r.Route("/operations", s.operationRoutes)
+			r.Route("/settings", s.settingsRoutes)
 			r.Route("/admin", func(r chi.Router) {
 				r.Use(s.requireAdmin)
 				s.adminRoutes(r)
