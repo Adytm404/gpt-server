@@ -25,15 +25,15 @@ describe('chat event normalization', () => {
     await expect(chatApi.getConfig()).resolves.toEqual({ configured: true, modelId: 'model-1', modelName: 'Ops Model', monthlyTokenLimit: 1000, usedTokens: 125, modelStatus: undefined })
   })
 
-  it('maps message kind and defaults legacy messages to chat', async () => {
+  it('maps message ordering fields, kind, and defaults legacy messages to chat', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ messages: [
       { id: 'm1', role: 'assistant', content: 'Legacy response' },
-      { id: 'm2', role: 'assistant', content: 'Execution result', kind: 'result', operation_id: 'op-2' },
+      { id: 'm2', role: 'assistant', content: 'Execution result', kind: 'result', operation_id: 'op-2', sequence: 8, reply_to_message_id: 'm1' },
     ] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
 
     await expect(chatApi.listMessages('t1')).resolves.toMatchObject([
       { id: 'm1', kind: 'chat' },
-      { id: 'm2', kind: 'result', operationId: 'op-2' },
+      { id: 'm2', kind: 'result', operationId: 'op-2', sequence: 8, replyToMessageId: 'm1' },
     ])
   })
 

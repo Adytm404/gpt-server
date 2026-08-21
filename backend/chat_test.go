@@ -63,6 +63,21 @@ func TestChatMessageResponseSerializesOptionalOperationID(t *testing.T) {
 	}
 }
 
+func TestChatMessageResponseSerializesSequenceAndReply(t *testing.T) {
+	replyID := uuid.New()
+	raw, err := json.Marshal(chatMessageResponse{Sequence: 42, ReplyToMessageID: &replyID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err = json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["sequence"] != float64(42) || out["reply_to_message_id"] != replyID.String() {
+		t.Fatalf("response = %#v", out)
+	}
+}
+
 func TestChatMessageQueriesPersistAndScanKinds(t *testing.T) {
 	chatRaw, err := os.ReadFile("chat.go")
 	if err != nil {
@@ -74,7 +89,7 @@ func TestChatMessageQueriesPersistAndScanKinds(t *testing.T) {
 	}
 	chatSource, operationSource := string(chatRaw), string(operationsRaw)
 	for _, clause := range []string{
-		"m.role,m.kind,m.operation_id,m.content",
+		"m.role,m.kind,m.operation_id,m.reply_to_message_id,m.sequence,m.content",
 		"'user','chat'",
 		"'assistant','chat'",
 		"'assistant','plan'",
@@ -91,7 +106,7 @@ func TestChatMessageQueriesPersistAndScanKinds(t *testing.T) {
 	}
 }
 
-func TestChatMessageQueriesPersistOperationOrdering(t *testing.T) {
+func TestChatMessageQueriesUsePersistentSequenceAndReplies(t *testing.T) {
 	chatRaw, err := os.ReadFile("chat.go")
 	if err != nil {
 		t.Fatal(err)
@@ -102,20 +117,27 @@ func TestChatMessageQueriesPersistOperationOrdering(t *testing.T) {
 	}
 	chatSource, operationSource := string(chatRaw), string(operationsRaw)
 	for _, clause := range []string{
-		"m.kind,m.operation_id,m.content",
-		"&x.Kind, &x.OperationID, &x.Content",
-		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content) VALUES($1,$2,$3,'user','chat',$4)",
-		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,'assistant','plan',$4,$5,$6,$7)",
+		"m.kind,m.operation_id,m.reply_to_message_id,m.sequence,m.content",
+		"ORDER BY m.sequence",
+		"&x.Kind, &x.OperationID, &x.ReplyToMessageID, &x.Sequence, &x.Content",
+		"nextval('chat_message_global_sequence')",
+		"RETURNING sequence",
+		"reply_to_message_id",
 		"OperationID: &opID",
-		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content) VALUES($1,$2,NULL,'user','chat',$3)",
-		"INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,NULL,'assistant','chat',$3,$4,$5,$6)",
+		"ReplyToMessageID: &msgID",
+		"ReplyToMessageID: &userID",
 	} {
 		if !strings.Contains(chatSource, clause) {
-			t.Errorf("chat operation ordering source missing %q", clause)
+			t.Errorf("chat sequence source missing %q", clause)
 		}
 	}
-	if !strings.Contains(operationSource, "INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,'assistant','result',$4,$5,$6,$7)") {
-		t.Error("operation summary does not persist its operation_id")
+	for _, clause := range []string{"nextval('chat_message_global_sequence')", "reply_to_message_id", "role='user'", "ORDER BY sequence"} {
+		if !strings.Contains(operationSource, clause) {
+			t.Errorf("operation summary sequence source missing %q", clause)
+		}
+	}
+	if strings.Contains(chatSource, "ORDER BY m.created_at,m.id") {
+		t.Error("chat list retains timestamp/UUID ordering")
 	}
 }
 

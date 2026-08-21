@@ -233,6 +233,18 @@ function timestamp(value?: string) {
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY
 }
 
+function compareTimelineItems(left: TimelineItem, right: TimelineItem) {
+  if (left.type === 'message' && right.type === 'message') {
+    if (left.message.sequence != null && right.message.sequence != null && left.message.sequence !== right.message.sequence) return left.message.sequence - right.message.sequence
+    const timeDifference = left.time - right.time
+    if (timeDifference) return timeDifference
+    const roleOrder = { user: 0, assistant: 1, system: 2 }
+    const roleDifference = roleOrder[left.message.role] - roleOrder[right.message.role]
+    if (roleDifference) return roleDifference
+  }
+  return left.time - right.time || left.order - right.order
+}
+
 function buildTimeline(messages: ChatMessage[], operations: Operation[], hiddenMessageId?: string) {
   const visibleMessages = messages.filter(message => message.kind !== 'plan' && message.id !== hiddenMessageId)
   const planTimes = new Map<string, number>()
@@ -249,7 +261,7 @@ function buildTimeline(messages: ChatMessage[], operations: Operation[], hiddenM
     const explicitAnchor = Math.max(timestamp(operation.createdAt), planTimes.get(operation.id) ?? Number.NEGATIVE_INFINITY, ...associatedRequestTimes)
     items.push({ type: 'operation', operation, time: Number.isFinite(explicitAnchor) ? explicitAnchor : timestamp(operation.createdAt), order: messages.length + index })
   })
-  items.sort((left, right) => left.time - right.time || left.order - right.order)
+  items.sort(compareTimelineItems)
 
   // Explicit associations override ambiguous equal/missing timestamps.
   for (const operation of operations) {
@@ -265,6 +277,17 @@ function buildTimeline(messages: ChatMessage[], operations: Operation[], hiddenM
       const adjustedResult = resultIndexes.length ? items.findIndex(candidate => candidate.type === 'message' && candidate.message.operationId === operation.id && candidate.message.kind === 'result') : items.length
       items.splice(Math.min(adjustedRequest, adjustedResult < 0 ? items.length : adjustedResult), 0, item)
     }
+  }
+
+  // Conversation replies have stronger ordering than ambiguous timestamps.
+  for (const message of visibleMessages) {
+    if (!message.replyToMessageId || message.operationId || message.kind === 'result') continue
+    const replyIndex = items.findIndex(item => item.type === 'message' && item.message.id === message.id)
+    const parentIndex = items.findIndex(item => item.type === 'message' && item.message.id === message.replyToMessageId)
+    if (replyIndex < 0 || parentIndex < 0 || replyIndex === parentIndex + 1) continue
+    const [reply] = items.splice(replyIndex, 1)
+    const adjustedParentIndex = items.findIndex(item => item.type === 'message' && item.message.id === message.replyToMessageId)
+    items.splice(adjustedParentIndex + 1, 0, reply)
   }
   return items
 }

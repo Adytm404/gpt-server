@@ -472,11 +472,17 @@ func (s *server) persistOperationSummary(id, workspaceID, threadID, modelID uuid
 	}
 	defer tx.Rollback(ctx)
 	messageID := uuid.New()
+	var replyToMessageID uuid.UUID
+	err = tx.QueryRow(ctx, `SELECT id FROM chat_messages WHERE operation_id=$1 AND role='user' ORDER BY sequence LIMIT 1`, id).Scan(&replyToMessageID)
+	if err != nil {
+		return
+	}
 	tag, err := tx.Exec(ctx, `UPDATE operations SET status='succeeded',error='',finished_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='summarizing'`, id, workspaceID)
 	if err != nil || tag.RowsAffected() != 1 {
 		return
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,'assistant','result',$4,$5,$6,$7)`, messageID, threadID, id, content, modelID, usage.InputTokens, usage.OutputTokens)
+	var messageSequence int64
+	err = tx.QueryRow(ctx, `INSERT INTO chat_messages(id,thread_id,operation_id,reply_to_message_id,role,kind,sequence,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'assistant','result',nextval('chat_message_global_sequence'),$5,$6,$7,$8) RETURNING sequence`, messageID, threadID, id, replyToMessageID, content, modelID, usage.InputTokens, usage.OutputTokens).Scan(&messageSequence)
 	if err == nil {
 		_, err = tx.Exec(ctx, `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,$5,'summary',$6,$7::bigint,$8::bigint,$7::bigint+$8::bigint,date_trunc('month',now())::date)`, uuid.New(), workspaceID, threadID, id, messageID, modelID, usage.InputTokens, usage.OutputTokens)
 	}

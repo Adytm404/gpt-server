@@ -170,6 +170,58 @@ describe('real chat workspace', () => {
     expect(card.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('orders same-timestamp replies by explicit sequence instead of response ID or API order', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [
+        { id: '000-assistant', role: 'assistant', content: 'Sequence answer', kind: 'chat', sequence: 12, reply_to_message_id: 'fff-user', created_at: '2026-08-21T10:00:00Z' },
+        { id: 'fff-user', role: 'user', content: 'Sequence question', kind: 'chat', sequence: 11, created_at: '2026-08-21T10:00:00Z' },
+      ] })
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+
+    const conversation = (await screen.findByText('Sequence question')).closest<HTMLElement>('.conversation')!
+    expect(within(conversation).getAllByTestId(/^message-/).map(item => item.getAttribute('data-testid'))).toEqual(['message-fff-user', 'message-000-assistant'])
+  })
+
+  it('places an ordinary linked reply directly after its user message', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [
+        { id: 'reply', role: 'assistant', content: 'Linked answer', kind: 'chat', reply_to_message_id: 'question', created_at: '2026-08-21T09:59:00Z' },
+        { id: 'question', role: 'user', content: 'Linked question', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
+        { id: 'later', role: 'user', content: 'Later question', kind: 'chat', created_at: '2026-08-21T10:01:00Z' },
+      ] })
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+
+    const conversation = (await screen.findByText('Linked question')).closest<HTMLElement>('.conversation')!
+    expect(within(conversation).getAllByTestId(/^message-/).map(item => item.getAttribute('data-testid'))).toEqual(['message-question', 'message-reply', 'message-later'])
+  })
+
+  it('orders legacy same-timestamp user messages before assistant messages', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [
+        { id: '000-ai', role: 'assistant', content: 'Legacy answer', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
+        { id: 'fff-user', role: 'user', content: 'Legacy question', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
+      ] })
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+
+    const conversation = (await screen.findByText('Legacy question')).closest<HTMLElement>('.conversation')!
+    expect(within(conversation).getAllByTestId(/^message-/).map(item => item.getAttribute('data-testid'))).toEqual(['message-fff-user', 'message-000-ai'])
+  })
+
   it('renders two interleaved operations old-to-new with only latest approval controls', async () => {
     const older = {
       ...operation,

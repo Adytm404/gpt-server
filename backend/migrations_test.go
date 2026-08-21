@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql", "012_operation_summaries.sql", "013_llm_intent_routing.sql", "014_chat_message_kind.sql", "015_chat_message_operation.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql", "012_operation_summaries.sql", "013_llm_intent_routing.sql", "014_chat_message_kind.sql", "015_chat_message_operation.sql", "016_chat_message_sequence.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,49 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestChatMessageSequenceMigration(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/016_chat_message_sequence.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{
+		"CREATE SEQUENCE IF NOT EXISTS chat_message_global_sequence",
+		"ADD COLUMN IF NOT EXISTS sequence bigint",
+		"row_number() OVER",
+		"EXISTS (SELECT 1 FROM chat_messages WHERE sequence IS NULL)",
+		"ORDER BY created_at",
+		"WHEN role = 'user' THEN 0",
+		"WHEN role = 'assistant' THEN 1",
+		"WHEN kind = 'chat' THEN 0",
+		"WHEN kind = 'plan' THEN 1",
+		"id",
+		"ALTER COLUMN sequence SET NOT NULL",
+		"ALTER COLUMN sequence SET DEFAULT nextval('chat_message_global_sequence')",
+		"setval('chat_message_global_sequence'",
+		"CREATE UNIQUE INDEX IF NOT EXISTS chat_messages_sequence_idx ON chat_messages(sequence)",
+		"CREATE INDEX IF NOT EXISTS chat_messages_thread_sequence_idx ON chat_messages(thread_id, sequence)",
+		"ADD COLUMN IF NOT EXISTS reply_to_message_id uuid",
+		"FOREIGN KEY (reply_to_message_id) REFERENCES chat_messages(id) ON DELETE SET NULL",
+		"candidate.operation_id = assistant.operation_id",
+		"candidate.sequence < assistant.sequence",
+		"ORDER BY candidate.sequence DESC",
+	} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("016 migration missing %q", clause)
+		}
+	}
+	createSequence := strings.Index(content, "CREATE SEQUENCE IF NOT EXISTS")
+	addSequence := strings.Index(content, "ADD COLUMN IF NOT EXISTS sequence bigint")
+	backfill := strings.Index(content, "row_number() OVER")
+	notNull := strings.Index(content, "ALTER COLUMN sequence SET NOT NULL")
+	defaultValue := strings.Index(content, "ALTER COLUMN sequence SET DEFAULT")
+	setval := strings.Index(content, "setval('chat_message_global_sequence'")
+	if createSequence < 0 || addSequence < createSequence || backfill < addSequence || notNull < backfill || defaultValue < notNull || setval < defaultValue {
+		t.Fatal("016 must create sequence, add/backfill column, constrain it, set default, then advance sequence")
 	}
 }
 

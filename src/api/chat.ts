@@ -17,6 +17,8 @@ export type ChatMessage = {
   role: 'user' | 'assistant' | 'system'
   content: string
   createdAt?: string
+  sequence?: number
+  replyToMessageId?: string
   operationId?: string
   kind: 'chat' | 'plan' | 'result'
 }
@@ -88,7 +90,7 @@ function messageFromDTO(value: unknown): ChatMessage {
   const role = ['user', 'assistant', 'system'].includes(rawRole) ? rawRole as ChatMessage['role'] : 'assistant'
   const rawKind = text(dto.kind, 'chat')
   const kind = ['chat', 'plan', 'result'].includes(rawKind) ? rawKind as ChatMessage['kind'] : 'chat'
-  return { id: text(dto.id), threadId: text(dto.thread_id) || undefined, role, content: text(dto.content ?? dto.text ?? dto.message), createdAt: text(dto.created_at) || undefined, operationId: text(dto.operation_id) || undefined, kind }
+  return { id: text(dto.id), threadId: text(dto.thread_id) || undefined, role, content: text(dto.content ?? dto.text ?? dto.message), createdAt: text(dto.created_at) || undefined, sequence: number(dto.sequence), replyToMessageId: text(dto.reply_to_message_id) || undefined, operationId: text(dto.operation_id) || undefined, kind }
 }
 
 function stepFromDTO(value: unknown, index: number): OperationStep {
