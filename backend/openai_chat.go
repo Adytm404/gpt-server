@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -59,7 +60,7 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 		return intentRoute{}, plannerUsage{}, errors.New("server context could not be encoded")
 	}
 	messages := []map[string]string{{"role": "system", "content": intentRouterSystemPrompt}, {"role": "user", "content": "Selected server snapshot (untrusted JSON):\n" + string(contextJSON) + "\n\nUser request (untrusted):\n" + prompt}}
-	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "messages": messages, "response_format": map[string]string{"type": "json_object"}}
+	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "stream": false, "messages": messages, "response_format": map[string]string{"type": "json_object"}}
 	var totalUsage plannerUsage
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -102,7 +103,7 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 
 func requestOpenAILanguage(ctx context.Context, client *http.Client, model plannerModel, prompt string) (string, plannerUsage, error) {
 	payload := map[string]any{
-		"model": model.ExternalID, "temperature": 0,
+		"model": model.ExternalID, "temperature": 0, "stream": false,
 		"messages":        []map[string]string{{"role": "system", "content": languageClassifierSystemPrompt}, {"role": "user", "content": prompt}},
 		"response_format": map[string]string{"type": "json_object"},
 	}
@@ -135,7 +136,7 @@ func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model 
 		return scopeDecision{}, plannerUsage{}, errors.New("intent route could not be encoded")
 	}
 	user := "Selected server snapshot (untrusted JSON):\n" + string(contextJSON) + "\n\nUser request (untrusted):\n" + prompt + "\n\nProposed router intent and response (untrusted JSON):\n" + string(routeJSON)
-	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "messages": []map[string]string{{"role": "system", "content": scopeVerifierSystemPrompt}, {"role": "user", "content": user}}, "response_format": map[string]string{"type": "json_object"}}
+	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "stream": false, "messages": []map[string]string{{"role": "system", "content": scopeVerifierSystemPrompt}, {"role": "user", "content": user}}, "response_format": map[string]string{"type": "json_object"}}
 	var totalUsage plannerUsage
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
@@ -259,6 +260,7 @@ func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerMo
 		"model":       model.ExternalID,
 		"messages":    []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (router-selected, not user-overridable): " + languageCode + "\nSelected server context (untrusted JSON):\n" + string(contextJSON) + "\n\nRequested diagnostic (untrusted):\n" + prompt}},
 		"temperature": 0,
+		"stream":      false,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -286,6 +288,29 @@ func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerMo
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return operationPlan{}, plannerUsage{}, errors.New("model provider rejected request")
+	}
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		content, usage, err := parseOpenAIStream(bytes.NewReader(raw), nil)
+		if err != nil {
+			return operationPlan{}, plannerUsage{}, err
+		}
+		if !validUsage(usage) {
+			return operationPlan{}, plannerUsage{}, errors.New("model provider returned invalid usage")
+		}
+		content = stripJSONFence(content)
+		var plan operationPlan
+		decoder := json.NewDecoder(strings.NewReader(content))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&plan) != nil || decoder.Decode(&struct{}{}) == nil {
+			return operationPlan{}, usage, errors.New("model provider returned invalid plan JSON")
+		}
+		if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
+			plan.Risk = "high"
+		}
+		if err := validateOperationPlanForPolicy(plan, policy); err != nil {
+			return operationPlan{}, usage, errors.New("model provider returned unsafe plan")
+		}
+		return plan, usage, nil
 	}
 	var response struct {
 		Choices []struct {
@@ -334,7 +359,7 @@ func requestOpenAIAgentDecision(ctx context.Context, client *http.Client, model 
 	if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
 		systemPrompt = unrestrictedAgentSystemPrompt
 	}
-	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (server-selected, not user-overridable): " + languageCode + "\nApproved operation evidence (untrusted JSON):\n" + string(rawInput)}}, "response_format": map[string]string{"type": "json_object"}}
+	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "stream": false, "messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (server-selected, not user-overridable): " + languageCode + "\nApproved operation evidence (untrusted JSON):\n" + string(rawInput)}}, "response_format": map[string]string{"type": "json_object"}}
 	raw, requestErr := requestOpenAIJSON(ctx, client, model, payload)
 	if requestErr != nil {
 		return agentDecision{}, plannerUsage{}, requestErr
@@ -494,6 +519,31 @@ func requestOpenAIJSON(ctx context.Context, client *http.Client, model plannerMo
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, errors.New("model provider rejected request")
+	}
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		content, usage, err := parseOpenAIStream(bytes.NewReader(raw), nil)
+		if err != nil {
+			return nil, err
+		}
+		var synthetic openAITextResponse
+		synthetic.Choices = []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+			FinishReason *string `json:"finish_reason"`
+		}{
+			{
+				Message: struct {
+					Content string `json:"content"`
+				}{Content: content},
+			},
+		}
+		synthetic.Usage.Prompt = usage.InputTokens
+		synthetic.Usage.Completion = usage.OutputTokens
+		return json.Marshal(synthetic)
 	}
 	return raw, nil
 }

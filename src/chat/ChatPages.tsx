@@ -95,13 +95,31 @@ function ServerPicker({ servers, value, onChange }: { servers: Server[]; value: 
   return <div className={cn('server-picker', open && 'open')} ref={root}><button className="server-picker-trigger" type="button" onClick={() => setOpen(value => !value)} aria-haspopup="listbox" aria-expanded={open}><i className={cn('server-picker-icon', selected.status.toLowerCase())}><ServerIcon size={14} /></i><span><b>{selected.name}</b><small>{selected.environment}</small></span><ChevronDown size={13} /></button>{open && <div className="server-picker-menu" role="listbox"><header><span>Target server</span><small>{servers.filter(server => server.status === 'Online').length} online</small></header>{servers.map(server => <button type="button" role="option" aria-selected={server.id === value} disabled={server.status === 'Offline'} className={server.id === value ? 'selected' : ''} key={server.id} onClick={() => { onChange(server.id); setOpen(false) }}><i className={cn('server-option-icon', server.status.toLowerCase())}><ServerIcon size={14} /></i><span><b>{server.name}</b><small>{server.host} / {server.environment}</small></span><em><i />{server.status}</em>{server.id === value && <Check size={14} />}</button>)}<footer><ShieldCheck size={12} /> Commands run only on selected server</footer></div>}</div>
 }
 
+function getStoredPolicy(): ChatPolicy {
+  try {
+    const raw = localStorage.getItem('opsai_preferred_policy')
+    if (raw === 'approval_required' || raw === 'explain_only' || raw === 'unrestricted_approval' || raw === 'autonomous_full_access') return raw
+  } catch {}
+  return 'approval_required'
+}
+
+function setStoredPolicy(policy: ChatPolicy) {
+  try {
+    localStorage.setItem('opsai_preferred_policy', policy)
+  } catch {}
+}
+
 function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compact = false, disabled = false, disabledReason = '', preset = '' }: { servers: Server[]; selectedServer: string; setSelectedServer?: (id: string) => void; onSubmit: (prompt: string, policy: ChatPolicy) => Promise<void>; compact?: boolean; disabled?: boolean; disabledReason?: string; preset?: string }) {
   const [prompt, setPrompt] = useState(preset)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [policy, setPolicy] = useState<ChatPolicy>('approval_required')
+  const [policy, setPolicyState] = useState<ChatPolicy>(getStoredPolicy)
   const [policyOpen, setPolicyOpen] = useState(false)
   const policyRoot = useRef<HTMLDivElement>(null)
+  const setPolicy = (next: ChatPolicy) => {
+    setPolicyState(next)
+    setStoredPolicy(next)
+  }
   useEffect(() => { if (preset) setPrompt(preset) }, [preset])
   useEffect(() => {
     const close = (event: MouseEvent) => { if (!policyRoot.current?.contains(event.target as Node)) setPolicyOpen(false) }

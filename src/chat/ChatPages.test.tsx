@@ -26,6 +26,9 @@ function renderWithThreads(node: React.ReactNode, route = '/chat') {
 }
 
 describe('real chat workspace', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
   afterEach(() => vi.restoreAllMocks())
 
   it('creates a thread and navigates with pending prompt before sending any message', async () => {
