@@ -18,6 +18,7 @@ export type ChatMessage = {
   content: string
   createdAt?: string
   operationId?: string
+  kind: 'chat' | 'plan' | 'result'
 }
 
 export type OperationStep = {
@@ -85,7 +86,9 @@ function messageFromDTO(value: unknown): ChatMessage {
   const dto = (value || {}) as AnyDTO
   const rawRole = text(dto.role, 'assistant')
   const role = ['user', 'assistant', 'system'].includes(rawRole) ? rawRole as ChatMessage['role'] : 'assistant'
-  return { id: text(dto.id), threadId: text(dto.thread_id) || undefined, role, content: text(dto.content ?? dto.text ?? dto.message), createdAt: text(dto.created_at) || undefined, operationId: text(dto.operation_id) || undefined }
+  const rawKind = text(dto.kind, 'chat')
+  const kind = ['chat', 'plan', 'result'].includes(rawKind) ? rawKind as ChatMessage['kind'] : 'chat'
+  return { id: text(dto.id), threadId: text(dto.thread_id) || undefined, role, content: text(dto.content ?? dto.text ?? dto.message), createdAt: text(dto.created_at) || undefined, operationId: text(dto.operation_id) || undefined, kind }
 }
 
 function stepFromDTO(value: unknown, index: number): OperationStep {

@@ -31,6 +31,7 @@ type chatMessageResponse struct {
 	ID           uuid.UUID  `json:"id"`
 	ThreadID     uuid.UUID  `json:"thread_id"`
 	Role         string     `json:"role"`
+	Kind         string     `json:"kind"`
 	Content      string     `json:"content"`
 	ModelID      *uuid.UUID `json:"model_id,omitempty"`
 	InputTokens  int64      `json:"input_tokens"`
@@ -279,7 +280,7 @@ func (s *server) listChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT m.id,m.thread_id,m.role,m.content,m.model_id,m.input_tokens,m.output_tokens,m.created_at FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id WHERE m.thread_id=$1 AND t.workspace_id=$2 ORDER BY m.created_at,m.id`, id, authFrom(r.Context()).WorkspaceID)
+	rows, err := s.db.Query(r.Context(), `SELECT m.id,m.thread_id,m.role,m.kind,m.content,m.model_id,m.input_tokens,m.output_tokens,m.created_at FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id WHERE m.thread_id=$1 AND t.workspace_id=$2 ORDER BY m.created_at,m.id`, id, authFrom(r.Context()).WorkspaceID)
 	if err != nil {
 		s.dbError(w, r, err)
 		return
@@ -288,7 +289,7 @@ func (s *server) listChatMessages(w http.ResponseWriter, r *http.Request) {
 	out := []chatMessageResponse{}
 	for rows.Next() {
 		var x chatMessageResponse
-		if err := rows.Scan(&x.ID, &x.ThreadID, &x.Role, &x.Content, &x.ModelID, &x.InputTokens, &x.OutputTokens, &x.CreatedAt); err != nil {
+		if err := rows.Scan(&x.ID, &x.ThreadID, &x.Role, &x.Kind, &x.Content, &x.ModelID, &x.InputTokens, &x.OutputTokens, &x.CreatedAt); err != nil {
 			s.dbError(w, r, err)
 			return
 		}
@@ -455,7 +456,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	opID, msgID := uuid.New(), uuid.New()
 	tx, err := conn.Begin(r.Context())
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3)`, msgID, threadID, in.Content)
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,kind,content) VALUES($1,$2,'user','chat',$3)`, msgID, threadID, in.Content)
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy,response_language) VALUES($1,$2,$3,$4,$5,$6,$7,'planning',$8,$9)`, opID, threadID, a.WorkspaceID, serverID, serverUpdatedAt, a.UserID, model.ID, in.Policy, route.LanguageCode)
@@ -514,7 +515,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, assistantID, threadID, assistantContent, model.ID, usage.InputTokens, usage.OutputTokens)
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant','plan',$3,$4,$5,$6)`, assistantID, threadID, assistantContent, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	for i, step := range plan.Steps {
 		if err != nil {
@@ -549,7 +550,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, r, err)
 		return
 	}
-	s.writeJSON(w, 201, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: assistantContent, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": op})
+	s.writeJSON(w, 201, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Kind: "plan", Content: assistantContent, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": op})
 }
 
 func validChatPolicy(policy string) bool {
@@ -568,10 +569,10 @@ func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, conn 
 	userID, assistantID := uuid.New(), uuid.New()
 	tx, err := conn.Begin(r.Context())
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3)`, userID, threadID, content)
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,kind,content) VALUES($1,$2,'user','chat',$3)`, userID, threadID, content)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, assistantID, threadID, response, model.ID, usage.InputTokens, usage.OutputTokens)
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant','chat',$3,$4,$5,$6)`, assistantID, threadID, response, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'routing',$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, userID, model.ID, routeUsage.InputTokens, routeUsage.OutputTokens)
@@ -591,7 +592,7 @@ func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, conn 
 		s.dbError(w, r, err)
 		return
 	}
-	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
+	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Kind: "chat", Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
 }
 
 func (s *server) persistRoutedResponse(w http.ResponseWriter, r *http.Request, conn *pgxpool.Conn, threadID, workspaceID uuid.UUID, model resolvedPlanner, content, response string, usage plannerUsage) {
@@ -605,10 +606,10 @@ func (s *server) persistRoutedResponse(w http.ResponseWriter, r *http.Request, c
 		}
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3)`, userID, threadID, content)
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,kind,content) VALUES($1,$2,'user','chat',$3)`, userID, threadID, content)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, assistantID, threadID, response, model.ID, usage.InputTokens, usage.OutputTokens)
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,kind,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant','chat',$3,$4,$5,$6)`, assistantID, threadID, response, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'routing',$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), workspaceID, threadID, assistantID, model.ID, usage.InputTokens, usage.OutputTokens)
@@ -625,7 +626,7 @@ func (s *server) persistRoutedResponse(w http.ResponseWriter, r *http.Request, c
 		s.dbError(w, r, err)
 		return
 	}
-	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
+	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Kind: "chat", Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
 }
 
 func (s *server) failPlanning(id uuid.UUID, message string) {

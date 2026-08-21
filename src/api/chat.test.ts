@@ -25,6 +25,18 @@ describe('chat event normalization', () => {
     await expect(chatApi.getConfig()).resolves.toEqual({ configured: true, modelId: 'model-1', modelName: 'Ops Model', monthlyTokenLimit: 1000, usedTokens: 125, modelStatus: undefined })
   })
 
+  it('maps message kind and defaults legacy messages to chat', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ messages: [
+      { id: 'm1', role: 'assistant', content: 'Legacy response' },
+      { id: 'm2', role: 'assistant', content: 'Execution result', kind: 'result' },
+    ] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(chatApi.listMessages('t1')).resolves.toMatchObject([
+      { id: 'm1', kind: 'chat' },
+      { id: 'm2', kind: 'result' },
+    ])
+  })
+
   it('maps backend operation steps and safely displays executable arguments', () => {
     const operation = operationFromDTO({ id: 'op-1', status: 'succeeded', summary: 'Host is healthy', finished_at: '2026-08-21T10:00:00Z', steps: [{ id: 's1', description: 'Show files', executable: 'printf', args: ['hello world', "it's-safe"], status: 'succeeded', stdout: 'hello world', stderr: '', exit_code: 0 }] })
     expect(operation).toMatchObject({ summary: 'Host is healthy', completedAt: '2026-08-21T10:00:00Z' })

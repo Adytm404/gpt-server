@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
-import { NavLink, useNavigate, useParams } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Command, Download, MessageSquare, MoreHorizontal, Play, Plus, Server as ServerIcon, ShieldCheck, Sparkles, Square, Terminal } from 'lucide-react'
 import { chatApi, operationEventFromMessage, operationEventsUrl, reduceOperationEvents, type ChatConfig, type ChatMessage, type ChatPolicy, type ChatThread, type Operation, type OperationEvent } from '../api/chat'
 import { serversApi, type Server } from '../api/servers'
@@ -108,15 +108,16 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
   }, [])
   const submit = async () => {
     if (!prompt.trim() || disabled || submitting || !selectedServer) return
-    setSubmitting(true); setError('')
-    try { await onSubmit(prompt.trim(), policy); setPrompt('') }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Unable to send message') }
+    const submittedPrompt = prompt.trim()
+    setPrompt(''); setSubmitting(true); setError('')
+    try { await onSubmit(submittedPrompt, policy) }
+    catch (caught) { setPrompt(submittedPrompt); setError(caught instanceof Error ? caught.message : 'Unable to send message') }
     finally { setSubmitting(false) }
   }
   return <div className={cn('composer', compact && 'compact-composer')}>
     <textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} placeholder={compact ? 'Ask a follow-up...' : 'Describe what you want to inspect...'} aria-label="Ask OpsAI" rows={compact ? 1 : 3} disabled={disabled || submitting} />
     {error && <div className="auth-error composer-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
-    <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<div className="composer-tool-popover" ref={policyRoot}><button type="button" className={cn('mode-button', policyOpen && 'active')} onClick={() => setPolicyOpen(open => !open)} aria-label="Execution policy" aria-haspopup="listbox" aria-expanded={policyOpen}><ShieldCheck size={15} /> {policies.find(item => item.value === policy)?.label} <ChevronDown size={13} /></button>{policyOpen && <div className="tool-menu policy-menu" role="listbox" aria-label="Execution policy options"><header><span>Execution policy</span><small>For this message</small></header>{policies.map(item => <button type="button" role="option" aria-selected={item.value === policy} className={item.value === policy ? 'selected' : ''} key={item.value} onClick={() => { setPolicy(item.value); setPolicyOpen(false) }}><i><ShieldCheck size={15} /></i><span><b>{item.label}</b><small>{item.description}</small></span>{item.value === policy && <Check size={14} />}</button>)}</div>}</div>{submitting && <span className="composer-planning"><span className="tiny-spinner" /> {policy === 'explain_only' ? 'Analyzing context...' : 'Planning operation...'}</span>}</div><button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button></div>
+    <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<div className="composer-tool-popover" ref={policyRoot}><button type="button" className={cn('mode-button', policyOpen && 'active')} onClick={() => setPolicyOpen(open => !open)} aria-label="Execution policy" aria-haspopup="listbox" aria-expanded={policyOpen}><ShieldCheck size={15} /> {policies.find(item => item.value === policy)?.label} <ChevronDown size={13} /></button>{policyOpen && <div className="tool-menu policy-menu" role="listbox" aria-label="Execution policy options"><header><span>Execution policy</span><small>For this message</small></header>{policies.map(item => <button type="button" role="option" aria-selected={item.value === policy} className={item.value === policy ? 'selected' : ''} key={item.value} onClick={() => { setPolicy(item.value); setPolicyOpen(false) }}><i><ShieldCheck size={15} /></i><span><b>{item.label}</b><small>{item.description}</small></span>{item.value === policy && <Check size={14} />}</button>)}</div>}</div></div><button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button></div>
     <p className="composer-policy-scope">{policies.find(item => item.value === policy)?.description}</p>
     {disabledReason && <p className="composer-disabled-reason">{disabledReason}</p>}
   </div>
@@ -146,9 +147,8 @@ export function ChatHomePage() {
   }, [])
   const submit = async (content: string, policy: ChatPolicy) => {
     const created = await chatApi.createThread({ serverId: selected, title: content.slice(0, 80) })
-    try { await chatApi.sendMessage(created.id, { content, policy }) }
-    catch (caught) { try { await chatApi.deleteThread(created.id) } catch { /* Best-effort cleanup keeps original planning error. */ }; await refresh(); throw caught }
-    await refresh(); navigate(`/chat/${created.id}`)
+    navigate(`/chat/${created.id}`, { state: { prompt: content, policy } })
+    void refresh()
   }
   const online = servers.filter(server => server.status === 'Online').length
   return <div className="home-page page-enter"><div className="ambient-grid" /><section className="hero"><div className="ai-orb"><div className="orb-core" /><div className="orb-ring ring-one" /><div className="orb-ring ring-two" /></div><div className="eyebrow"><span className="live-dot" /> {loading ? 'Loading server scope' : `${online} ${online === 1 ? 'server' : 'servers'} online`}</div><h1>What needs attention<br />across your <em>servers?</em></h1><p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
@@ -229,6 +229,7 @@ function ExecutionPanel({ operation, events, connection, cancel }: { operation: 
 export function ChatThreadPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const { refresh: refreshThreads } = useChatThreads()
   const [thread, setThread] = useState<ChatThread | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -236,9 +237,12 @@ export function ChatThreadPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [menu, setMenu] = useState(false)
+  const [pending, setPending] = useState<{ id: string; content: string; policy: ChatPolicy } | null>(null)
   const mounted = useRef(true)
   const currentId = useRef(id)
   const loadGeneration = useRef(0)
+  const pendingLocation = useRef(location.state as { prompt?: string; policy?: ChatPolicy } | null)
+  const endRef = useRef<HTMLDivElement>(null)
   currentId.current = id
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const load = useCallback(async () => {
@@ -263,16 +267,31 @@ export function ChatThreadPage() {
     } catch (caught) { setError(caught instanceof Error ? caught.message : `Unable to ${action} operation`) }
   }
   const followUp = async (content: string, policy: ChatPolicy) => {
+    if (pending) return
+    const optimistic = { id: `pending-${Date.now()}`, content, policy }
+    setPending(optimistic); setError('')
     try {
       const result = await chatApi.sendMessage(id, { content, policy })
       if (result.operation && mounted.current && currentId.current === id) setOperation(result.operation)
       await load(); await refreshThreads()
-      if (!result.operation && result.message && mounted.current && currentId.current === id) setMessages(current => current.some(message => message.id === result.message?.id || (message.role === 'assistant' && message.content === result.message?.content)) ? current : [...current, result.message!])
+      if (mounted.current && currentId.current === id) setPending(null)
     } catch (caught) {
       await load(); await refreshThreads()
+      if (mounted.current && currentId.current === id) setPending(null)
       throw caught
     }
   }
+  useEffect(() => {
+    if (loading || !thread) return
+    const state = pendingLocation.current
+    if (!state?.prompt || !state.policy) return
+    pendingLocation.current = null
+    navigate(location.pathname, { replace: true, state: null })
+    void followUp(state.prompt, state.policy).catch(caught => setError(caught instanceof Error ? caught.message : 'Unable to send message'))
+  }, [loading, thread?.id])
+  useEffect(() => {
+    if (pending || summaryPhase === 'summarizing' || messages.some(message => message.kind === 'result')) endRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'end' })
+  }, [pending, summaryPhase, messages])
   const rename = async () => { if (!thread) return; const title = window.prompt('Thread title', thread.title)?.trim(); if (!title) return; await chatApi.updateThread(id, { title, status: 'active' }); setMenu(false); await load(); await refreshThreads() }
   const archive = async () => { if (!thread || busy) return; const title = thread.title; await chatApi.updateThread(id, { title, status: 'archived' }); await refreshThreads(); navigate('/chat') }
   const remove = async () => { if (busy) return; if (!window.confirm('Delete this chat permanently?')) return; await chatApi.deleteThread(id); await refreshThreads(); navigate('/chat') }
@@ -281,13 +300,18 @@ export function ChatThreadPage() {
   const busy = operation ? busyStatuses.has(operation.status) || approvalStatuses.has(operation.status) || summaryPhase === 'summarizing' : false
   const summaryPersisted = messages.some(message => message.role === 'assistant' && ((summaryMessageId && message.id === summaryMessageId) || (summaryText && message.content === summaryText)))
   const showStreamedSummary = summaryPhase !== 'idle' && !summaryPersisted && (summaryPhase === 'summarizing' || Boolean(summaryText))
+  const chronological = [...messages].sort((left, right) => (left.createdAt && right.createdAt ? new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime() : 0))
+  const chatMessages = chronological.filter(message => message.kind === 'chat')
+  const resultMessages = chronological.filter(message => message.kind === 'result' && (!summaryMessageId || message.id !== summaryMessageId || !showStreamedSummary))
+  const renderMessage = (message: ChatMessage) => <div className={cn('message', message.role === 'user' ? 'user-message' : 'ai-message')} key={message.id}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div><p>{message.content}</p>{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>
   return <div className="thread-layout page-enter"><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div><div className="thread-menu"><button className="icon-button bordered" onClick={() => setMenu(value => !value)} aria-label="Thread actions"><MoreHorizontal size={18} /></button>{menu && <div><button onClick={() => void rename()}>Rename</button>{busy ? <span className="thread-menu-blocked">Cancel operation first to archive or delete.</span> : <><button onClick={() => void archive()}>Archive</button><button className="danger" onClick={() => void remove()}>Delete</button></>}</div>}</div></div>
     {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
-    <div className="conversation">{messages.length === 0 && !operation && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{messages.map(message => <div className={cn('message', message.role === 'user' ? 'user-message' : 'ai-message')} key={message.id}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div><p>{message.content}</p>{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>)}
-    {!operation && messages.some(message => message.role === 'user') && !messages.some(message => message.role === 'assistant') && <div className="message ai-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div><div className="message-meta"><strong>OpsAI</strong><span>planning...</span></div><p>Building operation plan for selected server scope.</p><span className="tiny-spinner" /></div></div>}
+    <div className="conversation">{messages.length === 0 && !operation && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{chatMessages.map(renderMessage)}
+    {pending && <><div className="message user-message" key={pending.id}><div className="message-avatar">YOU</div><div className="message-content"><div className="message-meta"><strong>You</strong><span>now</span></div><p>{pending.content}</p><span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span></div></div><div className="message ai-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong><span className="tiny-spinner" /></div><p>{pending.policy === 'explain_only' ? 'OpsAI sedang menganalisis snapshot server...' : 'OpsAI sedang memahami permintaan dan menentukan langkah...'}</p></div></div></>}
     {operation && <div className="message ai-message"><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={operation} summarizing={summaryPhase === 'summarizing'} mutate={mutate} /></div></div>}
-    {showStreamedSummary && <div className="message ai-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI sedang menjelaskan hasil...</span>}</div><p>{summaryText}{summaryPhase === 'summarizing' && <i className="summary-cursor" aria-hidden="true" />}</p></div></div>}</div>
-    <div className="thread-composer"><Composer compact servers={[]} selectedServer={thread.serverId} onSubmit={followUp} disabled={busy} disabledReason={busy ? `Follow-up unavailable while operation is ${operation?.status.replaceAll('_', ' ')}.` : ''} /></div></section>
+    {showStreamedSummary && <div className="message ai-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI sedang menjelaskan hasil...</span>}</div><p>{summaryText}{summaryPhase === 'summarizing' && <i className="summary-cursor" aria-hidden="true" />}</p></div></div>}
+    {resultMessages.map(renderMessage)}<div ref={endRef} /></div>
+    <div className="thread-composer"><Composer compact servers={[]} selectedServer={thread.serverId} onSubmit={followUp} disabled={busy || Boolean(pending)} disabledReason={busy ? `Follow-up unavailable while operation is ${operation?.status.replaceAll('_', ' ')}.` : ''} /></div></section>
     {operation && <ExecutionPanel operation={operation} events={events} connection={connection} cancel={() => mutate('cancel')} />}
   </div>
 }

@@ -27,6 +27,48 @@ func TestChatContentOnlyStructuralValidation(t *testing.T) {
 	}
 }
 
+func TestChatMessageResponseSerializesKind(t *testing.T) {
+	raw, err := json.Marshal(chatMessageResponse{Kind: "plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err = json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["kind"] != "plan" {
+		t.Fatalf("kind = %#v", out["kind"])
+	}
+}
+
+func TestChatMessageQueriesPersistAndScanKinds(t *testing.T) {
+	chatRaw, err := os.ReadFile("chat.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationsRaw, err := os.ReadFile("operations.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatSource, operationSource := string(chatRaw), string(operationsRaw)
+	for _, clause := range []string{
+		"m.role,m.kind,m.content",
+		"'user','chat'",
+		"'assistant','chat'",
+		"'assistant','plan'",
+	} {
+		if !strings.Contains(chatSource, clause) {
+			t.Errorf("chat message source missing %q", clause)
+		}
+	}
+	if !strings.Contains(operationSource, "'assistant','result'") {
+		t.Error("operation summary is not persisted as result")
+	}
+	if strings.Index(operationSource, "runOperationStep(ctx") > strings.Index(operationSource, "s.summarizeOperation(ctx") {
+		t.Fatal("operation summary must run after command steps")
+	}
+}
+
 func TestRuntimeHasNoKeywordIntentOrLanguageRouting(t *testing.T) {
 	for _, name := range []string{"chat.go", "chat_security.go", "openai_chat.go", "operations.go"} {
 		raw, err := os.ReadFile(filepath.Join(".", name))

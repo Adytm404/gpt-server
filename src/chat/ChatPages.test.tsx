@@ -1,12 +1,24 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage, RecentChats } from './ChatPages'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const server = { id: 'srv-real-uuid', name: 'Edge One', host: 'edge.example.com', port: 22, ssh_user: 'ops', auth_method: 'ssh_key', environment: 'production', status: 'online', region: 'eu', host_fingerprint: '' }
 const thread = { id: 'thread-1', title: 'Inspect edge load', server_id: server.id, server_name: server.name, created_at: '2026-08-21T10:00:00Z', updated_at: '2026-08-21T10:02:00Z' }
 const operation = { id: 'op-1', thread_id: thread.id, server_id: server.id, server_name: server.name, title: 'Inspect load', status: 'pending_approval', steps: [{ id: 'step-1', title: 'Read load average', status: 'pending', command: 'uptime' }] }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise })
+  return { promise, resolve, reject }
+}
+
+function ThreadDestination() {
+  const location = useLocation()
+  return <div>thread destination:{JSON.stringify(location.state)}</div>
+}
 
 function renderWithThreads(node: React.ReactNode, route = '/chat') {
   return render(<MemoryRouter initialEntries={[route]}><ChatThreadsProvider>{node}</ChatThreadsProvider></MemoryRouter>)
@@ -15,7 +27,7 @@ function renderWithThreads(node: React.ReactNode, route = '/chat') {
 describe('real chat workspace', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('loads servers and sends chosen UUID when creating first message', async () => {
+  it('creates a thread and navigates with pending prompt before sending any message', async () => {
     const requests: Array<{ url: string; body?: Record<string, unknown> }> = []
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input); const body = init?.body ? JSON.parse(String(init.body)) : undefined
@@ -23,18 +35,18 @@ describe('real chat workspace', () => {
       if (url.endsWith('/chat/config')) return json({ configured: true, model_id: 'model-1', model_name: 'Backend Model', monthly_token_limit: 1000, used_tokens: 20 })
       if (url.endsWith('/servers')) return json({ servers: [server] })
       if (url.endsWith('/chat/threads') && init?.method === 'POST') return json({ thread }, 201)
-      if (url.endsWith('/messages') && init?.method === 'POST') return json({ message: { id: 'msg-1', role: 'user', content: body.content }, operation }, 201)
       if (url.endsWith('/chat/threads')) return json({ threads: [] })
       throw new Error(`Unexpected request: ${url}`)
     })
-    renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<div>thread destination</div>} /></Routes>)
+    renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<ThreadDestination />} /></Routes>)
 
     expect(await screen.findByText('Edge One')).toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Ask OpsAI'), 'Check load')
     await userEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(await screen.findByText('thread destination')).toBeInTheDocument()
+    expect(await screen.findByText(/thread destination/)).toHaveTextContent('"prompt":"Check load"')
+    expect(screen.getByText(/thread destination/)).toHaveTextContent('"policy":"approval_required"')
     expect(requests.find(request => request.url.endsWith('/chat/threads') && request.body)?.body).toMatchObject({ server_id: 'srv-real-uuid' })
-    expect(requests.find(request => request.url.endsWith('/messages'))?.body).toEqual({ content: 'Check load', policy: 'approval_required' })
+    expect(requests.some(request => request.url.endsWith('/messages'))).toBe(false)
   })
 
   it('offers only safe policies and sends exact explain_only body', async () => {
@@ -48,7 +60,7 @@ describe('real chat workspace', () => {
       if (url.endsWith('/chat/threads')) return json({ threads: [] })
       throw new Error(`Unexpected request: ${url}`)
     })
-    renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<div>thread destination</div>} /></Routes>)
+    renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<ThreadDestination />} /></Routes>)
     await userEvent.click(await screen.findByRole('button', { name: 'Execution policy' }))
     const options = screen.getByRole('listbox', { name: 'Execution policy options' })
     expect(within(options).getAllByRole('option')).toHaveLength(2)
@@ -59,8 +71,96 @@ describe('real chat workspace', () => {
     expect(screen.getByText(/No commands will run\./)).toBeInTheDocument()
     await userEvent.type(screen.getByLabelText('Ask OpsAI'), 'Explain latest state')
     await userEvent.click(screen.getByRole('button', { name: 'Send' }))
-    expect(await screen.findByText('thread destination')).toBeInTheDocument()
-    expect(requests).toEqual([{ content: 'Explain latest state', policy: 'explain_only' }])
+    expect(await screen.findByText(/thread destination/)).toHaveTextContent('"policy":"explain_only"')
+    expect(requests).toEqual([])
+  })
+
+  it('shows optimistic user and approval thinking messages while request is pending and clears text', async () => {
+    const pending = deferred<Response>()
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/messages') && init?.method === 'POST') return pending.promise
+      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    const composer = await screen.findByLabelText('Ask OpsAI')
+    await userEvent.type(composer, 'Check memory pressure')
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+
+    expect(composer).toHaveValue('')
+    expect(screen.getByText('Check memory pressure')).toBeInTheDocument()
+    expect(screen.getByText('OpsAI sedang memahami permintaan dan menentukan langkah...')).toBeInTheDocument()
+    expect(screen.getByText('Edge One')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    expect(screen.queryByText('Planning operation...')).not.toBeInTheDocument()
+
+    pending.resolve(json({ message: { id: 'm-user', role: 'user', content: 'Check memory pressure', kind: 'chat' }, operation }, 201))
+  })
+
+  it('restores submitted text after follow-up failure', async () => {
+    const pending = deferred<Response>()
+    let messageLists = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/messages') && init?.method === 'POST') return pending.promise
+      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: [] }) }
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    const composer = await screen.findByLabelText('Ask OpsAI')
+    await userEvent.type(composer, 'Retry this request')
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    pending.resolve(json({ error: 'Planning failed' }, 500))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Planning failed')
+    expect(composer).toHaveValue('Retry this request')
+    expect(messageLists).toBeGreaterThan(1)
+  })
+
+  it('uses snapshot analysis copy for optimistic explain-only follow-up', async () => {
+    const pending = deferred<Response>()
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/messages') && init?.method === 'POST') return pending.promise
+      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    await userEvent.click(await screen.findByRole('button', { name: 'Execution policy' }))
+    await userEvent.click(screen.getByRole('option', { name: /Explain only/ }))
+    await userEvent.type(screen.getByLabelText('Ask OpsAI'), 'Explain snapshot')
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(screen.getByText('OpsAI sedang menganalisis snapshot server...')).toBeInTheDocument()
+    pending.resolve(json({ message: { id: 'answer', role: 'assistant', content: 'Healthy', kind: 'chat' } }, 201))
+  })
+
+  it('hides plan messages and renders operation before persisted result', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [
+        { id: 'm1', role: 'user', content: 'Inspect load', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
+        { id: 'm2', role: 'assistant', content: 'Generic context', kind: 'chat', created_at: '2026-08-21T10:00:01Z' },
+        { id: 'm3', role: 'assistant', content: 'Hidden plan summary', kind: 'plan', operation_id: operation.id, created_at: '2026-08-21T10:00:02Z' },
+        { id: 'm4', role: 'assistant', content: 'Final operation result', kind: 'result', operation_id: operation.id, created_at: '2026-08-21T10:00:03Z' },
+      ] })
+      if (url.includes('/operations?')) return json({ operations: [{ ...operation, status: 'succeeded' }] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    const generic = await screen.findByText('Generic context')
+    const card = screen.getByText('Read load average')
+    const result = screen.getByText('Final operation result')
+    expect(screen.queryByText('Hidden plan summary')).not.toBeInTheDocument()
+    expect(generic.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(card.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('renders explain_only assistant response without terminal or plan', async () => {
@@ -68,7 +168,7 @@ describe('real chat workspace', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
       if (url.endsWith('/messages') && init?.method === 'POST') return json({ message: { id: 'answer-1', role: 'assistant', content: 'No commands were run.' } }, 201)
-      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: [] }) }
+      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: messageLists > 1 ? [{ id: 'answer-1', role: 'assistant', content: 'No commands were run.', kind: 'chat' }] : [] }) }
       if (url.includes('/operations?')) return json({ operations: [] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
