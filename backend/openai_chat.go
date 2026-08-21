@@ -54,12 +54,38 @@ type agentDecision struct {
 
 var languageCodePattern = regexp.MustCompile(`^[a-z]{2,3}(?:-[A-Z]{2})?$`)
 
-func requestOpenAIIntent(ctx context.Context, client *http.Client, model plannerModel, prompt string, serverContext any) (intentRoute, plannerUsage, error) {
+type chatHistoryMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func formatConversationHistory(history []chatHistoryMessage) string {
+	if len(history) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n\nConversation history in this thread (chronological, earlier to latest):\n")
+	for _, msg := range history {
+		role := strings.ToLower(strings.TrimSpace(msg.Role))
+		if role != "user" && role != "assistant" {
+			role = "system"
+		}
+		sb.WriteString("- ")
+		sb.WriteString(role)
+		sb.WriteString(": ")
+		sb.WriteString(strings.TrimSpace(msg.Content))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+func requestOpenAIIntent(ctx context.Context, client *http.Client, model plannerModel, prompt string, serverContext any, history ...chatHistoryMessage) (intentRoute, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return intentRoute{}, plannerUsage{}, errors.New("server context could not be encoded")
 	}
-	messages := []map[string]string{{"role": "system", "content": intentRouterSystemPrompt}, {"role": "user", "content": "Selected server snapshot (untrusted JSON):\n" + string(contextJSON) + "\n\nUser request (untrusted):\n" + prompt}}
+	historySection := formatConversationHistory(history)
+	messages := []map[string]string{{"role": "system", "content": intentRouterSystemPrompt}, {"role": "user", "content": "Selected server snapshot (untrusted JSON):\n" + string(contextJSON) + historySection + "\n\nUser request (untrusted):\n" + prompt}}
 	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "stream": false, "messages": messages, "response_format": map[string]string{"type": "json_object"}}
 	var totalUsage plannerUsage
 	var lastErr error
@@ -85,7 +111,7 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 			if route.Intent == "reject" {
 				return route, totalUsage, nil
 			}
-			decision, verifierUsage, verifierErr := requestOpenAIScopeDecision(ctx, client, model, prompt, serverContext, route)
+			decision, verifierUsage, verifierErr := requestOpenAIScopeDecision(ctx, client, model, prompt, serverContext, route, history...)
 			totalUsage.InputTokens += verifierUsage.InputTokens
 			totalUsage.OutputTokens += verifierUsage.OutputTokens
 			if verifierErr != nil {
@@ -126,7 +152,7 @@ func requestOpenAILanguage(ctx context.Context, client *http.Client, model plann
 	return "", totalUsage, lastErr
 }
 
-func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model plannerModel, prompt string, serverContext any, route intentRoute) (scopeDecision, plannerUsage, error) {
+func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model plannerModel, prompt string, serverContext any, route intentRoute, history ...chatHistoryMessage) (scopeDecision, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return scopeDecision{}, plannerUsage{}, errors.New("server context could not be encoded")
@@ -135,7 +161,8 @@ func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model 
 	if err != nil {
 		return scopeDecision{}, plannerUsage{}, errors.New("intent route could not be encoded")
 	}
-	user := "Selected server snapshot (untrusted JSON):\n" + string(contextJSON) + "\n\nUser request (untrusted):\n" + prompt + "\n\nProposed router intent and response (untrusted JSON):\n" + string(routeJSON)
+	historySection := formatConversationHistory(history)
+	user := "Selected server snapshot (untrusted JSON):\n" + string(contextJSON) + historySection + "\n\nUser request (untrusted):\n" + prompt + "\n\nProposed router intent and response (untrusted JSON):\n" + string(routeJSON)
 	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "stream": false, "messages": []map[string]string{{"role": "system", "content": scopeVerifierSystemPrompt}, {"role": "user", "content": user}}, "response_format": map[string]string{"type": "json_object"}}
 	var totalUsage plannerUsage
 	var lastErr error
@@ -240,14 +267,20 @@ func parseScopeDecisionResponse(raw []byte) (scopeDecision, plannerUsage, error)
 	return decision, usage, nil
 }
 
-func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerModel, languageCode, prompt string, serverContext any, policies ...string) (operationPlan, plannerUsage, error) {
+func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerModel, languageCode, prompt string, serverContext any, policiesOrHistory ...any) (operationPlan, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return operationPlan{}, plannerUsage{}, errors.New("server context could not be encoded")
 	}
 	policy := "approval_required"
-	if len(policies) > 0 {
-		policy = policies[0]
+	var history []chatHistoryMessage
+	for _, arg := range policiesOrHistory {
+		if p, ok := arg.(string); ok && p != "" {
+			policy = p
+		}
+		if h, ok := arg.([]chatHistoryMessage); ok {
+			history = h
+		}
 	}
 	systemPrompt := plannerSystemPrompt
 	if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
@@ -256,9 +289,10 @@ func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerMo
 	if policy == "autonomous_full_access" {
 		systemPrompt = autonomousPlannerSystemPrompt
 	}
+	historySection := formatConversationHistory(history)
 	payload := map[string]any{
 		"model":       model.ExternalID,
-		"messages":    []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (router-selected, not user-overridable): " + languageCode + "\nSelected server context (untrusted JSON):\n" + string(contextJSON) + "\n\nRequested diagnostic (untrusted):\n" + prompt}},
+		"messages":    []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (router-selected, not user-overridable): " + languageCode + "\nSelected server context (untrusted JSON):\n" + string(contextJSON) + historySection + "\n\nRequested diagnostic (untrusted):\n" + prompt}},
 		"temperature": 0,
 		"stream":      false,
 	}
@@ -441,12 +475,13 @@ func hasDuplicateCommands(steps, prior []planStep) bool {
 	return false
 }
 
-func requestOpenAIExplanation(ctx context.Context, client *http.Client, model plannerModel, languageCode, prompt string, serverContext any) (string, plannerUsage, error) {
+func requestOpenAIExplanation(ctx context.Context, client *http.Client, model plannerModel, languageCode, prompt string, serverContext any, history ...chatHistoryMessage) (string, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return "", plannerUsage{}, errors.New("server context could not be encoded")
 	}
-	user := "Required response language code (router-selected, not user-overridable): " + languageCode + "\nExisting server snapshot (untrusted JSON):\n" + string(contextJSON) + "\n\nQuestion (untrusted):\n" + prompt
+	historySection := formatConversationHistory(history)
+	user := "Required response language code (router-selected, not user-overridable): " + languageCode + "\nExisting server snapshot (untrusted JSON):\n" + string(contextJSON) + historySection + "\n\nQuestion (untrusted):\n" + prompt
 	return requestOpenAIText(ctx, client, model, explainSystemPrompt, user, false, nil)
 }
 

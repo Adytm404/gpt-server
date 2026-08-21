@@ -97,13 +97,13 @@
 .status-pill.unknown i,.server-glyph.unknown:after { background: #999; box-shadow: none; }
 .server-api-state,.server-empty-panel { min-height: 130px; padding: 25px; border: 1px solid var(--line); border-radius: 12px; background: #fff; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--muted); font-size: 10px; text-align: center; }.server-api-state.error { color: var(--red); flex-direction: column; }.server-modal-error { margin: 12px 0; padding: 10px 12px; border: 1px solid #efd1d1; border-radius: 8px; background: #fff6f6; color: var(--red); font-size: 9px; }.danger-button { color: var(--red)!important; }.snapshot-bar { height: 5px; margin: 25px 0 18px; border-radius: 5px; background: var(--soft); overflow: hidden; }.snapshot-bar i { display: block; height: 100%; background: var(--accent); }.server-empty-panel.compact { min-height: 90px; border: 0; }.service-readonly { grid-template-columns: 34px minmax(0,1fr) auto; }
 
-.modal-layer { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 20px; }
+.modal-layer { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 16px; max-height: 100vh; }
 .modal-scrim { position: absolute; inset: 0; background: #1d1c2266; backdrop-filter: blur(4px); border: 0; }
-.modal-card { width: min(650px,100%); background: #fff; border: 1px solid #ffffff90; border-radius: 17px; box-shadow: 0 24px 90px #11111633; position: relative; overflow: hidden; animation: modal-in .25s ease; }
+.modal-card { width: min(650px,100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: #fff; border: 1px solid #ffffff90; border-radius: 17px; box-shadow: 0 24px 90px #11111633; position: relative; overflow: hidden; animation: modal-in .25s ease; }
 @keyframes modal-in { from { opacity: 0; transform: translateY(12px) scale(.98); } }
-.modal-header { padding: 22px 24px 18px; display: flex; align-items: flex-start; justify-content: space-between; }
+.modal-header { padding: 22px 24px 18px; display: flex; align-items: flex-start; justify-content: space-between; flex-shrink: 0; }
 .modal-header h2 { margin: 5px 0 0; font-size: 23px; letter-spacing: -.03em; }
-.stepper { display: grid; grid-template-columns: repeat(3,1fr); padding: 0 24px 19px; border-bottom: 1px solid var(--line); }
+.stepper { display: grid; grid-template-columns: repeat(3,1fr); padding: 0 24px 19px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .step { display: flex; align-items: center; gap: 7px; color: #aaaab0; font-size: 9px; position: relative; }
 .step:after { content: ''; height: 1px; background: var(--line); position: absolute; left: 26px; right: 9px; bottom: -20px; }
 .step:last-child:after { display: none; }
@@ -111,7 +111,7 @@
 .step.active { color: var(--ink); }
 .step.active i { color: #fff; background: var(--accent); border-color: var(--accent); }
 .step.active:after { background: var(--accent); }
-.modal-body { padding: 24px; min-height: 315px; position: relative; }
+.modal-body { padding: 24px; min-height: 0; flex: 1 1 auto; overflow-y: auto; position: relative; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 17px; }
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field.full, .security-note.full, .auth-method.full { grid-column: 1/-1; }
@@ -134,7 +134,7 @@
 .password-control input { width: 100%; padding-right: 44px; }
 .password-control button { position: absolute; top: 50%; right: 5px; display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; transform: translateY(-50%); cursor: pointer; }
 .password-control button:hover { color: var(--ink); background: #f1efed; }
-.modal-footer { padding: 15px 24px; background: #fafaf8; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
+.modal-footer { padding: 15px 24px; background: #fafaf8; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
 .connection-result { text-align: center; padding: 20px 0; }
 .success-seal { width: 58px; height: 58px; border-radius: 50%; margin: auto; display: grid; place-items: center; color: #fff; background: var(--green); box-shadow: 0 0 0 9px #20876a0e; }
 .connection-result h3 { margin: 20px 0 5px; font-size: 19px; }

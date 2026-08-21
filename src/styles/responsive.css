@@ -56,7 +56,7 @@
   .server-row>span:nth-child(2),.server-row .resource-bars { display: none; }
   .server-list.grid-view { grid-template-columns: 1fr; }.ssh-access-card { grid-template-columns: 42px 1fr; }.ssh-access-card .button { grid-column: 1/-1; width: 100%; }.row-menu>div { right: 0; }
   .modal-layer { padding: 0; align-items: end; }
-  .modal-card { border-radius: 18px 18px 0 0; max-height: 94vh; overflow-y: auto; }
+  .modal-card { border-radius: 18px 18px 0 0; max-height: 94vh; }
   .form-grid { grid-template-columns: 1fr; }
   .field.full,.security-note.full,.auth-method.full { grid-column: auto; }
   .step span { display: none; }
