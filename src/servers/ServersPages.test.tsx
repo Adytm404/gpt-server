@@ -2,6 +2,9 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { ServerDetailPage, ServersPage } from './ServersPages'
+import { DialogProvider } from '../ui/DialogProvider'
+
+const renderPage = (node: React.ReactNode) => render(<DialogProvider>{node}</DialogProvider>)
 
 const server = { id: 'srv-1', name: 'Production API', host: 'api.example.com', port: 22, ssh_user: 'deploy', auth_method: 'ssh_key', environment: 'production', status: 'online', region: 'sgp-1', host_fingerprint: 'SHA256:test' }
 
@@ -18,14 +21,14 @@ describe('server pages', () => {
 
   it('renders list response and explicit missing snapshot state', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ servers: [server], summary: { total: 1, online: 1, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
     expect(await screen.findByText('Production API')).toBeInTheDocument()
     expect(screen.getByText('No snapshot')).toBeInTheDocument()
   })
 
   it('offers backend server statuses as filters', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ servers: [server], summary: { total: 1, online: 1, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
     await screen.findByText('Production API')
     await userEvent.click(screen.getByRole('button', { name: 'Filter' }))
     expect(screen.getByRole('button', { name: 'Online' })).toBeInTheDocument()
@@ -35,7 +38,7 @@ describe('server pages', () => {
 
   it('shows accessible auth tabs, defaults to key, and switches credential fields', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ servers: [], summary: { total: 0, online: 0, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
     await openFilledModal()
 
     expect(screen.getByRole('tab', { name: 'SSH key' })).toHaveAttribute('aria-selected', 'true')
@@ -55,7 +58,7 @@ describe('server pages', () => {
       if (url.endsWith('/api/v1/servers') && init?.method === 'GET') return new Response(JSON.stringify({ servers: [], summary: { total: 0, online: 0, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       throw new Error(`Unexpected request: ${url}`)
     })
-    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
     await openFilledModal()
     await userEvent.type(screen.getByLabelText('Private key'), 'test-private-key')
     await userEvent.click(screen.getByRole('button', { name: /Test & add server/ }))
@@ -76,7 +79,7 @@ describe('server pages', () => {
       }
       throw new Error(`Unexpected request: ${url}`)
     })
-    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
     await openFilledModal('password')
     await userEvent.type(screen.getByLabelText('SSH password'), 'test-password')
     await userEvent.click(screen.getByRole('button', { name: /Test & add server/ }))
@@ -102,7 +105,7 @@ describe('server pages', () => {
       if (url.endsWith('/test-draft')) return new Response(JSON.stringify({ success: true, auth_method: 'ssh_key', latency_ms: 9 }), { status: 200, headers: { 'Content-Type': 'application/json' } })
       return new Response(JSON.stringify(server), { status: 201, headers: { 'Content-Type': 'application/json' } })
     })
-    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
     await openFilledModal()
     await userEvent.type(screen.getByLabelText('Private key'), 'test-private-key')
     await userEvent.click(screen.getByRole('button', { name: /Test & add server/ }))
@@ -141,7 +144,7 @@ describe('server pages', () => {
       detailCalls += 1
       return new Response(JSON.stringify(detailCalls > 1 ? refreshedServer : server), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
-    render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
+    renderPage(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
     expect(await screen.findByText(/No metrics collected yet/)).toBeInTheDocument()
     expect(screen.getByText('Run health check to collect hardware specifications.')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Run health check/i }))
@@ -168,7 +171,7 @@ describe('server pages', () => {
 
   it('shows backend list failure and retry', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: 'servers unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } }))
-    render(<MemoryRouter><ServersPage /></MemoryRouter>)
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
     expect(await screen.findByRole('alert')).toHaveTextContent('servers unavailable')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
@@ -177,7 +180,7 @@ describe('server pages', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => new Response(JSON.stringify(String(input).endsWith('/test')
       ? { status: 'offline', error: 'connection refused' }
       : server), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
+    renderPage(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
     await userEvent.click(await screen.findByRole('button', { name: 'Test SSH connection' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('connection refused')
     expect(screen.getByText('Production API')).toBeInTheDocument()
@@ -193,7 +196,7 @@ describe('server pages', () => {
       detailCalls += 1
       return new Response(JSON.stringify(detailCalls > 1 ? refreshedServer : { ...server, status: 'unknown', host_fingerprint: '' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     })
-    render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
+    renderPage(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
     expect(await screen.findByText('Not reported')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Test SSH connection' }))
 
@@ -205,11 +208,23 @@ describe('server pages', () => {
     expect(fetchMock.mock.calls.map(([url]) => String(url).split('/').pop())).toEqual(['srv-1', 'test', 'srv-1'])
   })
 
+  it('confirms server deletion before calling API', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => init?.method === 'DELETE'
+      ? new Response(null, { status: 204 })
+      : new Response(JSON.stringify(server), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    renderPage(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /><Route path="/servers" element={<div>Server list</div>} /></Routes></MemoryRouter>)
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    expect(screen.getByRole('dialog', { name: 'Delete server?' })).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
+    await userEvent.click(screen.getByRole('button', { name: 'Delete server' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true))
+  })
+
   it('keeps detail mounted after action HTTP failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => String(input).endsWith('/health-check')
       ? new Response(JSON.stringify({ error: 'health unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
       : new Response(JSON.stringify(server), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    render(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
+    renderPage(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /></Routes></MemoryRouter>)
     await userEvent.click(await screen.findByRole('button', { name: /Run health check/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent('health unavailable')
     expect(screen.getByText('Production API')).toBeInTheDocument()

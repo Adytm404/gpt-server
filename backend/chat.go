@@ -48,6 +48,7 @@ type operationResponse struct {
 	ApprovedBy, RejectedBy                        *uuid.UUID
 	ApprovedAt, RejectedAt, StartedAt, FinishedAt *time.Time
 	CreatedAt, UpdatedAt                          time.Time
+	AgentRound                                    int
 	Steps                                         []operationStepResponse
 }
 
@@ -72,9 +73,10 @@ func (o operationResponse) MarshalJSON() ([]byte, error) {
 		FinishedAt *time.Time              `json:"finished_at,omitempty"`
 		CreatedAt  time.Time               `json:"created_at"`
 		UpdatedAt  time.Time               `json:"updated_at"`
+		AgentRound int                     `json:"agent_round"`
 		Steps      []operationStepResponse `json:"steps"`
 	}
-	return json.Marshal(dto{o.ID, o.ThreadID, o.ServerID, o.CreatedBy, o.ModelID, o.Status, o.Policy, o.Risk, o.Title, o.Summary, o.Error, o.ApprovedBy, o.RejectedBy, o.ApprovedAt, o.RejectedAt, o.StartedAt, o.FinishedAt, o.CreatedAt, o.UpdatedAt, o.Steps})
+	return json.Marshal(dto{ID: o.ID, ThreadID: o.ThreadID, ServerID: o.ServerID, CreatedBy: o.CreatedBy, ModelID: o.ModelID, Status: o.Status, Policy: o.Policy, Risk: o.Risk, Title: o.Title, Summary: o.Summary, Error: o.Error, ApprovedBy: o.ApprovedBy, RejectedBy: o.RejectedBy, ApprovedAt: o.ApprovedAt, RejectedAt: o.RejectedAt, StartedAt: o.StartedAt, FinishedAt: o.FinishedAt, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt, AgentRound: o.AgentRound, Steps: o.Steps})
 }
 
 type operationStepResponse struct {

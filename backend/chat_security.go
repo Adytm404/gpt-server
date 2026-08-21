@@ -3,7 +3,9 @@ package main
 import (
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,7 @@ const (
 var (
 	asciiTokenPattern    = regexp.MustCompile(`^[A-Za-z0-9-][A-Za-z0-9_.@:-]{0,127}$`)
 	serviceTokenPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$`)
+	findPattern          = regexp.MustCompile(`^\*?[A-Za-z0-9 _.-]+\*?$`)
 	summaryIPPattern     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
 	secretOutputPatterns = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)[^\s]+`),
@@ -71,6 +74,24 @@ func validateReadOnlyCommand(executable string, args []string) error {
 	if !asciiTokenPattern.MatchString(executable) || len(args) > 12 {
 		return errors.New("command is not permitted")
 	}
+	if executable == "du" {
+		return validateDU(args)
+	}
+	if executable == "find" {
+		return validateFind(args)
+	}
+	if executable == "ls" {
+		if len(args) != 3 || args[0] != "-la" || args[1] != "--" {
+			return errors.New("ls arguments are not permitted")
+		}
+		return validateSafeAbsolutePath(args[2])
+	}
+	if executable == "stat" {
+		if len(args) != 2 || args[0] != "--" {
+			return errors.New("stat arguments are not permitted")
+		}
+		return validateSafeAbsolutePath(args[1])
+	}
 	for _, arg := range args {
 		if len(arg) == 0 || len(arg) > 128 || (executable != "ps" && !asciiTokenPattern.MatchString(arg)) || strings.ContainsAny(arg, ";|&><`$*?!\\\n\r\t") {
 			return errors.New("command argument is not permitted")
@@ -109,6 +130,74 @@ func validateReadOnlyCommand(executable string, args []string) error {
 		return errors.New("executable is not permitted")
 	}
 	return nil
+}
+
+func validateDU(args []string) error {
+	var target string
+	if len(args) == 3 && args[0] == "-sh" && args[1] == "--" {
+		target = args[2]
+	} else if len(args) == 4 && args[0] == "-s" && args[1] == "--block-size=1" && args[2] == "--" {
+		target = args[3]
+	} else {
+		return errors.New("du arguments are not permitted")
+	}
+	return validateSafeAbsolutePath(target)
+}
+
+func validateFind(args []string) error {
+	if len(args) != 7 || args[1] != "-maxdepth" || args[3] != "-type" || args[4] != "d" || args[5] != "-iname" {
+		return errors.New("find arguments are not permitted")
+	}
+	allowedRoot := false
+	for _, root := range []string{"/root", "/home", "/var/backups", "/opt", "/srv", "/backup", "/backups"} {
+		allowedRoot = allowedRoot || args[0] == root
+	}
+	depth, err := strconv.Atoi(args[2])
+	pattern := args[6]
+	name := strings.ToLower(strings.Trim(pattern, "*"))
+	if !allowedRoot || err != nil || depth < 1 || depth > 6 || len(pattern) == 0 || len(pattern) > 100 || !findPattern.MatchString(pattern) || strings.Count(pattern, "*") > 2 || strings.Contains(name, "*") || sensitivePathPart(name) {
+		return errors.New("find arguments are not permitted")
+	}
+	return nil
+}
+
+func validateSafeAbsolutePath(value string) error {
+	if len(value) == 0 || len(value) > 512 || !strings.HasPrefix(value, "/") || strings.ContainsRune(value, 0) || (len(value) > 1 && strings.HasSuffix(value, "/")) {
+		return errors.New("path is not permitted")
+	}
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return errors.New("path is not permitted")
+		}
+	}
+	parts := strings.Split(value, "/")
+	for _, part := range parts {
+		lower := strings.ToLower(part)
+		if part == ".." || sensitivePathPart(lower) {
+			return errors.New("path is not permitted")
+		}
+	}
+	clean := path.Clean(value)
+	allowedRoot := false
+	for _, root := range []string{"/root", "/home", "/var/backups", "/opt", "/srv", "/backup", "/backups"} {
+		if strings.HasPrefix(clean, root+"/") {
+			allowedRoot = true
+			break
+		}
+	}
+	if !allowedRoot {
+		return errors.New("path is not permitted")
+	}
+	for _, blocked := range []string{"/proc", "/sys", "/dev", "/run/credentials", "/etc/shadow"} {
+		if clean == blocked || strings.HasPrefix(clean, blocked+"/") {
+			return errors.New("path is not permitted")
+		}
+	}
+	return nil
+}
+
+func sensitivePathPart(lower string) bool {
+	return strings.HasPrefix(lower, ".") || strings.HasSuffix(lower, ".pem") || strings.HasSuffix(lower, ".key") || strings.Contains(lower, "secret") || strings.Contains(lower, "credential") || strings.Contains(lower, "password") || strings.Contains(lower, "passwd") || strings.Contains(lower, "api_key") || strings.Contains(lower, "api-key") || strings.Contains(lower, "token")
 }
 
 func oneOfArgSets(got []string, allowed ...[]string) bool {

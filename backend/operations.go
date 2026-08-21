@@ -22,6 +22,9 @@ import (
 
 const maxOperationOutput = 1 << 20
 const maxSummaryInput = 64 << 10
+const maxAgentInput = 64 << 10
+const maxAgentRounds = 4
+const maxOperationSteps = 12
 
 func (s *server) operationRoutes(r chi.Router) {
 	r.Get("/", s.listOperations)
@@ -32,11 +35,11 @@ func (s *server) operationRoutes(r chi.Router) {
 	r.Get("/{id}/events", s.operationEvents)
 }
 
-const operationSelect = `SELECT id,thread_id,server_id,created_by,model_id,status,policy,risk,title,summary,error,approved_by,rejected_by,approved_at,rejected_at,started_at,finished_at,created_at,updated_at FROM operations`
+const operationSelect = `SELECT id,thread_id,server_id,created_by,model_id,status,policy,risk,title,summary,error,approved_by,rejected_by,approved_at,rejected_at,started_at,finished_at,created_at,updated_at,agent_round FROM operations`
 
 func scanOperation(row pgx.Row) (operationResponse, error) {
 	var o operationResponse
-	err := row.Scan(&o.ID, &o.ThreadID, &o.ServerID, &o.CreatedBy, &o.ModelID, &o.Status, &o.Policy, &o.Risk, &o.Title, &o.Summary, &o.Error, &o.ApprovedBy, &o.RejectedBy, &o.ApprovedAt, &o.RejectedAt, &o.StartedAt, &o.FinishedAt, &o.CreatedAt, &o.UpdatedAt)
+	err := row.Scan(&o.ID, &o.ThreadID, &o.ServerID, &o.CreatedBy, &o.ModelID, &o.Status, &o.Policy, &o.Risk, &o.Title, &o.Summary, &o.Error, &o.ApprovedBy, &o.RejectedBy, &o.ApprovedAt, &o.RejectedAt, &o.StartedAt, &o.FinishedAt, &o.CreatedAt, &o.UpdatedAt, &o.AgentRound)
 	return o, err
 }
 
@@ -265,34 +268,63 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 		return
 	}
 	defer client.Close()
-	rows, err := s.db.Query(ctx, `SELECT id,position,description,executable,args FROM operation_steps WHERE operation_id=$1 ORDER BY position`, id)
-	if err != nil {
-		s.finishOperation(ctx, id, "failed", "operation steps unavailable")
-		return
-	}
-	var steps []operationStepResponse
-	for rows.Next() {
-		var x operationStepResponse
-		if rows.Scan(&x.ID, &x.Position, &x.Description, &x.Executable, &x.Args) != nil {
-			rows.Close()
-			s.finishOperation(ctx, id, "failed", "operation steps invalid")
+	for {
+		steps, loadErr := s.loadOperationSteps(ctx, id)
+		if loadErr != nil {
+			s.finishOperation(ctx, id, "failed", "operation steps unavailable")
 			return
 		}
-		steps = append(steps, x)
-	}
-	rows.Close()
-	for _, step := range steps {
-		if ctx.Err() != nil {
-			s.markOperationStepsCancelled(context.Background(), id)
-			return
-		}
-		if err = s.runOperationStep(ctx, client, id, step, len(steps)); err != nil {
+		for _, step := range steps {
+			if step.Status != "pending" {
+				continue
+			}
 			if ctx.Err() != nil {
 				s.markOperationStepsCancelled(context.Background(), id)
 				return
 			}
-			s.finishOperation(context.Background(), id, "failed", "diagnostic step failed")
+			if err = s.runOperationStep(ctx, client, id, step, len(steps)); err != nil {
+				if ctx.Err() != nil {
+					s.markOperationStepsCancelled(context.Background(), id)
+					return
+				}
+				s.finishOperation(context.Background(), id, "failed", "diagnostic step failed")
+				return
+			}
+		}
+		steps, loadErr = s.loadOperationSteps(ctx, id)
+		if loadErr != nil {
+			s.setAgentSummaryNote(id, "Agent could not continue because operation evidence became unavailable.")
+			break
+		}
+		round := 0
+		if queryErr := s.db.QueryRow(ctx, `SELECT agent_round FROM operations WHERE id=$1 AND workspace_id=$2 AND status='running'`, id, workspaceID).Scan(&round); queryErr != nil {
 			return
+		}
+		if !canRequestAgentDecision(round, len(steps)) {
+			s.setAgentSummaryNote(id, "Agent investigation limit reached; summary uses evidence collected so far.")
+			break
+		}
+		decision, usage, decisionErr := s.decideAgentContinuation(ctx, id, workspaceID, round+1, steps)
+		if ctx.Err() != nil {
+			return
+		}
+		if decisionErr != nil {
+			s.recordAgentRound(id, workspaceID, round+1, usage, nil, "Agent could not continue safely; summary uses evidence collected so far.")
+			break
+		}
+		if decision.Status == "complete" {
+			if s.recordAgentRound(id, workspaceID, round+1, usage, nil, "") != nil {
+				s.setAgentSummaryNote(id, "Agent could not persist its completion decision; summary uses evidence collected so far.")
+			}
+			break
+		}
+		if len(steps)+len(decision.Steps) > maxOperationSteps {
+			s.recordAgentRound(id, workspaceID, round+1, usage, nil, "Agent investigation step limit reached; summary uses evidence collected so far.")
+			break
+		}
+		if err = s.recordAgentRound(id, workspaceID, round+1, usage, decision.Steps, ""); err != nil {
+			s.setAgentSummaryNote(id, "Agent could not append further safe checks; summary uses evidence collected so far.")
+			break
 		}
 	}
 	if err := s.beginSummarizing(ctx, id); err != nil {
@@ -301,6 +333,174 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 		return
 	}
 	s.summarizeOperation(ctx, id, workspaceID)
+}
+
+type agentOperationInput struct {
+	Request string                   `json:"request"`
+	Server  map[string]any           `json:"server"`
+	Title   string                   `json:"plan_title"`
+	Plan    string                   `json:"plan_summary"`
+	Steps   []agentOperationEvidence `json:"completed_steps"`
+}
+
+type agentOperationEvidence struct {
+	Description string   `json:"description"`
+	Executable  string   `json:"executable"`
+	Args        []string `json:"args"`
+	ExitCode    int      `json:"exit_code"`
+	Stdout      string   `json:"stdout"`
+	Stderr      string   `json:"stderr"`
+}
+
+func canRequestAgentDecision(round, stepCount int) bool {
+	return round < maxAgentRounds && stepCount < maxOperationSteps
+}
+
+func nextStepPositions(current, count int) []int {
+	positions := make([]int, count)
+	for i := range positions {
+		positions[i] = current + i + 1
+	}
+	return positions
+}
+
+func (s *server) decideAgentContinuation(ctx context.Context, id, workspaceID uuid.UUID, round int, steps []operationStepResponse) (agentDecision, plannerUsage, error) {
+	if err := s.requireWorkspaceTokenQuota(ctx, workspaceID); err != nil {
+		return agentDecision{}, plannerUsage{}, err
+	}
+	_ = insertOperationEvent(ctx, s.db, id, "agent.thinking", uuid.Nil, map[string]any{"round": round})
+	var input agentOperationInput
+	var model plannerModel
+	var ciphertext []byte
+	var language string
+	err := s.db.QueryRow(ctx, `SELECT m.base_url,m.external_model_id,m.api_key_ciphertext,o.response_language,o.title,o.summary,
+		COALESCE((SELECT content FROM chat_messages WHERE operation_id=o.id AND role='user' ORDER BY sequence LIMIT 1),''),
+		jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'status',s.status,'last_checked_at',s.last_checked_at)
+		FROM operations o JOIN ai_models m ON m.id=o.model_id JOIN servers s ON s.id=o.server_id AND s.workspace_id=o.workspace_id WHERE o.id=$1 AND o.workspace_id=$2 AND o.status='running'`, id, workspaceID).Scan(&model.BaseURL, &model.ExternalID, &ciphertext, &language, &input.Title, &input.Plan, &input.Request, &input.Server)
+	if err != nil {
+		return agentDecision{}, plannerUsage{}, err
+	}
+	if len(ciphertext) > 0 {
+		model.APIKey, err = decryptModelAPIKey(s.cfg.modelKeyEncryptionKey, ciphertext)
+		if err != nil {
+			return agentDecision{}, plannerUsage{}, err
+		}
+	}
+	prior := make([]planStep, 0, len(steps))
+	for _, step := range steps {
+		prior = append(prior, planStep{Description: step.Description, Executable: step.Executable, Args: step.Args})
+		if step.Status == "succeeded" {
+			exitCode := 0
+			if step.ExitCode != nil {
+				exitCode = *step.ExitCode
+			}
+			input.Steps = append(input.Steps, agentOperationEvidence{Description: boundedRedacted(step.Description, 1024), Executable: step.Executable, Args: step.Args, ExitCode: exitCode, Stdout: boundedRedacted(step.Stdout, 8192), Stderr: boundedRedacted(step.Stderr, 8192)})
+		}
+	}
+	input.Request = boundedRedacted(input.Request, 4096)
+	input.Title = boundedRedacted(input.Title, 1024)
+	input.Plan = boundedRedacted(input.Plan, 4096)
+	for {
+		raw, _ := json.Marshal(input)
+		if len(raw) <= maxAgentInput || len(input.Steps) == 0 {
+			break
+		}
+		input.Steps = input.Steps[1:]
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.modelRequestTimeout)
+	defer cancel()
+	return requestOpenAIAgentDecision(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, language, input, prior)
+}
+
+func (s *server) requireWorkspaceTokenQuota(ctx context.Context, workspaceID uuid.UUID) error {
+	var limit, used int64
+	err := s.db.QueryRow(ctx, `SELECT monthly_token_limit,COALESCE((SELECT sum(total_tokens) FROM token_usage WHERE workspace_id=$1 AND period_start=date_trunc('month',now())::date),0) FROM workspace_subscriptions WHERE workspace_id=$1`, workspaceID).Scan(&limit, &used)
+	if err != nil {
+		return err
+	}
+	if limit <= 0 {
+		return errNoEntitlement
+	}
+	if used >= limit {
+		return errQuotaExceeded
+	}
+	return nil
+}
+
+func (s *server) recordAgentRound(id, workspaceID uuid.UUID, round int, usage plannerUsage, steps []planStep, note string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var threadID, modelID uuid.UUID
+	var currentSteps, currentRound int
+	err = tx.QueryRow(ctx, `SELECT thread_id,model_id,agent_round,(SELECT count(*) FROM operation_steps WHERE operation_id=operations.id) FROM operations WHERE id=$1 AND workspace_id=$2 AND status='running' FOR UPDATE`, id, workspaceID).Scan(&threadID, &modelID, &currentRound, &currentSteps)
+	if err != nil || round != currentRound+1 || round > maxAgentRounds || currentSteps+len(steps) > maxOperationSteps {
+		if err != nil {
+			return err
+		}
+		return errors.New("agent operation limit exceeded")
+	}
+	priorRows, err := tx.Query(ctx, `SELECT executable,args FROM operation_steps WHERE operation_id=$1 ORDER BY position`, id)
+	if err != nil {
+		return err
+	}
+	var prior []planStep
+	for priorRows.Next() {
+		var step planStep
+		if err = priorRows.Scan(&step.Executable, &step.Args); err != nil {
+			priorRows.Close()
+			return err
+		}
+		prior = append(prior, step)
+	}
+	err = priorRows.Err()
+	priorRows.Close()
+	if err != nil || hasDuplicateCommands(steps, prior) {
+		if err != nil {
+			return err
+		}
+		return errors.New("duplicate agent command")
+	}
+	for _, step := range steps {
+		if strings.TrimSpace(step.Description) == "" || validateReadOnlyCommand(step.Executable, step.Args) != nil {
+			return errors.New("unsafe agent command")
+		}
+	}
+	_, err = tx.Exec(ctx, `UPDATE operations SET agent_round=$3,error=CASE WHEN $4='' THEN error ELSE $4 END,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='running'`, id, workspaceID, round, note)
+	if err != nil {
+		return err
+	}
+	if validUsage(usage) {
+		_, err = tx.Exec(ctx, `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,phase,round,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,'agent',$5,$6,$7::bigint,$8::bigint,$7::bigint+$8::bigint,date_trunc('month',now())::date)`, uuid.New(), workspaceID, threadID, id, round, modelID, usage.InputTokens, usage.OutputTokens)
+		if err != nil {
+			return err
+		}
+	}
+	positions := nextStepPositions(currentSteps, len(steps))
+	descriptions := make([]string, len(steps))
+	for i, step := range steps {
+		args, _ := json.Marshal(step.Args)
+		_, err = tx.Exec(ctx, `INSERT INTO operation_steps(id,operation_id,position,description,executable,args,status) VALUES($1,$2,$3,$4,$5,$6,'pending')`, uuid.New(), id, positions[i], step.Description, step.Executable, args)
+		if err != nil {
+			return err
+		}
+		descriptions[i] = step.Description
+	}
+	if len(steps) > 0 {
+		err = insertOperationEvent(ctx, tx, id, "flow.updated", uuid.Nil, map[string]any{"round": round, "total": currentSteps + len(steps), "new_steps": descriptions})
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *server) setAgentSummaryNote(id uuid.UUID, note string) {
+	_, _ = s.db.Exec(context.Background(), `UPDATE operations SET error=$2,updated_at=now() WHERE id=$1 AND status='running'`, id, note)
 }
 
 func (s *server) beginSummarizing(ctx context.Context, id uuid.UUID) error {
@@ -331,6 +531,7 @@ type summaryOperationInput struct {
 	Title   string                 `json:"plan_title"`
 	Plan    string                 `json:"plan_summary"`
 	Steps   []summaryOperationStep `json:"completed_steps"`
+	Note    string                 `json:"investigation_note,omitempty"`
 }
 
 type summaryOperationStep struct {
@@ -344,6 +545,7 @@ func boundSummaryInput(input summaryOperationInput) summaryOperationInput {
 	input.Request = boundedRedacted(input.Request, 4096)
 	input.Title = boundedRedacted(input.Title, 1024)
 	input.Plan = boundedRedacted(input.Plan, 4096)
+	input.Note = boundedRedacted(input.Note, 2048)
 	for i := range input.Steps {
 		input.Steps[i].Description = boundedRedacted(input.Steps[i].Description, 1024)
 		input.Steps[i].Stdout = boundedRedacted(input.Steps[i].Stdout, 8192)
@@ -387,11 +589,11 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 	var model plannerModel
 	var ciphertext []byte
 	var languageCode string
-	err := s.db.QueryRow(ctx, `SELECT o.thread_id,o.model_id,m.base_url,m.external_model_id,m.api_key_ciphertext,o.response_language,o.title,o.summary,
+	err := s.db.QueryRow(ctx, `SELECT o.thread_id,o.model_id,m.base_url,m.external_model_id,m.api_key_ciphertext,o.response_language,o.title,o.summary,o.error,
 		COALESCE((SELECT cm.content FROM operation_events e JOIN chat_messages cm ON cm.id=(e.payload->>'message_id')::uuid WHERE e.operation_id=o.id AND e.event_type='planning' ORDER BY e.id LIMIT 1),''),
 		jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'status',s.status,'last_checked_at',s.last_checked_at,
 		'health',COALESCE((SELECT jsonb_build_object('status',h.status,'cpu_percent',h.cpu_percent,'memory_percent',h.memory_percent,'disk_percent',h.disk_percent,'services',h.services,'checked_at',h.checked_at) FROM server_health_snapshots h WHERE h.server_id=s.id ORDER BY h.checked_at DESC LIMIT 1),'{}'::jsonb))
-		FROM operations o JOIN ai_models m ON m.id=o.model_id JOIN servers s ON s.id=o.server_id WHERE o.id=$1 AND o.workspace_id=$2 AND o.status='summarizing'`, id, workspaceID).Scan(&threadID, &modelID, &model.BaseURL, &model.ExternalID, &ciphertext, &languageCode, &input.Title, &input.Plan, &input.Request, &input.Server)
+		FROM operations o JOIN ai_models m ON m.id=o.model_id JOIN servers s ON s.id=o.server_id WHERE o.id=$1 AND o.workspace_id=$2 AND o.status='summarizing'`, id, workspaceID).Scan(&threadID, &modelID, &model.BaseURL, &model.ExternalID, &ciphertext, &languageCode, &input.Title, &input.Plan, &input.Note, &input.Request, &input.Server)
 	if err == nil && len(ciphertext) > 0 {
 		model.APIKey, err = decryptModelAPIKey(s.cfg.modelKeyEncryptionKey, ciphertext)
 	}
@@ -436,6 +638,9 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 	}
 	var content string
 	var usage plannerUsage
+	if err == nil {
+		err = s.requireWorkspaceTokenQuota(ctx, workspaceID)
+	}
 	if err == nil {
 		requestCtx, cancel := context.WithTimeout(ctx, s.cfg.modelRequestTimeout)
 		content, usage, err = requestOpenAISummary(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, languageCode, input, onDelta)

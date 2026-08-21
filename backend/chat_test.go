@@ -210,17 +210,109 @@ func TestOpenAIIntentLanguageFallback(t *testing.T) {
 }
 
 func TestReadOnlyCommandGuardCorpus(t *testing.T) {
-	valid := []planStep{{Executable: "uptime"}, {Executable: "free", Args: []string{"-h"}}, {Executable: "df", Args: []string{"-P"}}, {Executable: "ps", Args: []string{"-eo", "pid,comm,pcpu,pmem"}}, {Executable: "uname", Args: []string{"-r"}}, {Executable: "systemctl", Args: []string{"is-active", "nginx.service"}}, {Executable: "systemctl", Args: []string{"list-units", "--failed"}}, {Executable: "docker", Args: []string{"ps"}}}
+	valid := []planStep{{Executable: "uptime"}, {Executable: "free", Args: []string{"-h"}}, {Executable: "df", Args: []string{"-P"}}, {Executable: "ps", Args: []string{"-eo", "pid,comm,pcpu,pmem"}}, {Executable: "uname", Args: []string{"-r"}}, {Executable: "systemctl", Args: []string{"is-active", "nginx.service"}}, {Executable: "systemctl", Args: []string{"list-units", "--failed"}}, {Executable: "docker", Args: []string{"ps"}}, {Executable: "du", Args: []string{"-sh", "--", "/var/backups/nirvaya data"}}, {Executable: "du", Args: []string{"-s", "--block-size=1", "--", "/backup/archive"}}, {Executable: "find", Args: []string{"/var/backups", "-maxdepth", "6", "-type", "d", "-iname", "*nirvaya backup*"}}, {Executable: "ls", Args: []string{"-la", "--", "/srv/apps"}}, {Executable: "stat", Args: []string{"--", "/opt/app"}}}
 	for _, step := range valid {
 		if err := validateReadOnlyCommand(step.Executable, step.Args); err != nil {
 			t.Errorf("valid command %+v rejected: %v", step, err)
 		}
 	}
-	invalid := []planStep{{Executable: "bash", Args: []string{"-c", "uptime"}}, {Executable: "cat", Args: []string{"/etc/passwd"}}, {Executable: "uptime;id"}, {Executable: "df", Args: []string{"-h;id"}}, {Executable: "ps", Args: []string{"aux"}}, {Executable: "ps", Args: []string{"aux|cat"}}, {Executable: "systemctl", Args: []string{"restart", "nginx"}}, {Executable: "systemctl", Args: []string{"status", "nginx"}}, {Executable: "systemctl", Args: []string{"is-active", "../ssh"}}, {Executable: "journalctl", Args: []string{"--no-pager", "-n", "10", "-u", "nginx"}}, {Executable: "docker", Args: []string{"logs", "--tail", "100", "api"}}, {Executable: "curl", Args: []string{"example.com"}}, {Executable: "ｕｐｔｉｍｅ"}, {Executable: "hostname", Args: []string{"$(id)"}}}
+	invalid := []planStep{{Executable: "bash", Args: []string{"-c", "uptime"}}, {Executable: "cat", Args: []string{"/etc/passwd"}}, {Executable: "uptime;id"}, {Executable: "df", Args: []string{"-h;id"}}, {Executable: "ps", Args: []string{"aux"}}, {Executable: "ps", Args: []string{"aux|cat"}}, {Executable: "systemctl", Args: []string{"restart", "nginx"}}, {Executable: "systemctl", Args: []string{"status", "nginx"}}, {Executable: "systemctl", Args: []string{"is-active", "../ssh"}}, {Executable: "journalctl", Args: []string{"--no-pager", "-n", "10", "-u", "nginx"}}, {Executable: "docker", Args: []string{"logs", "--tail", "100", "api"}}, {Executable: "curl", Args: []string{"example.com"}}, {Executable: "ｕｐｔｉｍｅ"}, {Executable: "hostname", Args: []string{"$(id)"}},
+		{Executable: "du", Args: []string{"-sh", "/backup"}}, {Executable: "du", Args: []string{"-sh", "--", "relative"}}, {Executable: "du", Args: []string{"-sh", "--", "/backup/../etc"}}, {Executable: "du", Args: []string{"-sh", "--", "/proc/1"}}, {Executable: "du", Args: []string{"-sh", "--", "/etc"}}, {Executable: "du", Args: []string{"-sh", "--", "/root"}}, {Executable: "du", Args: []string{"-sh", "--", "/srv/apps/"}}, {Executable: "du", Args: []string{"-sh", "--", "/home/me/.ssh"}}, {Executable: "du", Args: []string{"-sh", "--", "/srv/client-secrets"}}, {Executable: "du", Args: []string{"-sh", "--", "/backup\nother"}}, {Executable: "ls", Args: []string{"-la", "--", "/etc/shadow"}}, {Executable: "stat", Args: []string{"--", "/run/credentials/x"}},
+		{Executable: "find", Args: []string{"/etc", "-maxdepth", "2", "-type", "d", "-iname", "backup"}}, {Executable: "find", Args: []string{"/root", "-maxdepth", "0", "-type", "d", "-iname", "backup"}}, {Executable: "find", Args: []string{"/root", "-maxdepth", "7", "-type", "d", "-iname", "backup"}}, {Executable: "find", Args: []string{"/root", "-maxdepth", "2", "-type", "f", "-iname", "backup"}}, {Executable: "find", Args: []string{"/root", "-maxdepth", "2", "-type", "d", "-iname", "foo/bar"}}, {Executable: "find", Args: []string{"/root", "-maxdepth", "2", "-type", "d", "-iname", "a*b*c"}}, {Executable: "find", Args: []string{"/root", "-maxdepth", "2", "-type", "d", "-iname", "$(id)"}}, {Executable: "find", Args: []string{"/root", "-maxdepth", "2", "-type", "d", "-iname", ".ssh"}}, {Executable: "find", Args: []string{"/home", "-maxdepth", "2", "-type", "d", "-iname", ".*"}}, {Executable: "find", Args: []string{"/home", "-maxdepth", "2", "-type", "d", "-iname", "*credential*"}}}
 	for _, step := range invalid {
 		if err := validateReadOnlyCommand(step.Executable, step.Args); err == nil {
 			t.Errorf("unsafe command %+v accepted", step)
 		}
+	}
+}
+
+func TestAgentDecisionValidationRejectsUnsafeAndRepeatedCommands(t *testing.T) {
+	prior := []planStep{{Executable: "find", Args: []string{"/srv", "-maxdepth", "3", "-type", "d", "-iname", "*nirvaya*"}}}
+	valid := agentDecision{Status: "continue", Reason: "Found candidate", Steps: []planStep{{Description: "Measure candidate", Executable: "du", Args: []string{"-sh", "--", "/srv/nirvaya"}}}}
+	if err := validateAgentDecision(valid, prior); err != nil {
+		t.Fatal(err)
+	}
+	for _, decision := range []agentDecision{
+		{Status: "complete", Reason: "done", Steps: valid.Steps},
+		{Status: "continue", Reason: "more"},
+		{Status: "continue", Reason: "repeat", Steps: []planStep{{Description: "again", Executable: prior[0].Executable, Args: prior[0].Args}}},
+		{Status: "continue", Reason: "unsafe", Steps: []planStep{{Description: "read", Executable: "du", Args: []string{"-sh", "--", "/root/.ssh"}}}},
+	} {
+		if validateAgentDecision(decision, prior) == nil {
+			t.Fatalf("invalid decision accepted: %+v", decision)
+		}
+	}
+}
+
+func TestOpenAIAgentDecisionKeyedKeylessStrictJSONAndUsage(t *testing.T) {
+	for _, key := range []string{"", "secret"} {
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != map[bool]string{true: "Bearer secret", false: ""}[key != ""] {
+				t.Errorf("authorization=%q", got)
+			}
+			var request struct {
+				Messages       []map[string]string `json:"messages"`
+				ResponseFormat map[string]string   `json:"response_format"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil || request.ResponseFormat["type"] != "json_object" || !strings.Contains(request.Messages[1]["content"], "Required response language code") {
+				t.Fatal("invalid agent request")
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"status\":\"continue\",\"reason\":\"candidate found\",\"steps\":[{\"description\":\"measure\",\"executable\":\"du\",\"args\":[\"-sh\",\"--\",\"/srv/nirvaya\"]}]}"}}],"usage":{"prompt_tokens":11,"completion_tokens":5}}`))
+		}))
+		decision, usage, err := requestOpenAIAgentDecision(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, map[string]struct{}{provider.URL: {}}, "id", agentOperationInput{Request: "cek backup"}, nil)
+		provider.Close()
+		if err != nil || decision.Status != "continue" || usage.InputTokens != 11 || usage.OutputTokens != 5 {
+			t.Fatalf("key=%q decision=%+v usage=%+v err=%v", key, decision, usage, err)
+		}
+	}
+}
+
+func TestOpenAIAgentDecisionProviderSafety(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "provider secret", 500) }))
+	defer provider.Close()
+	model := plannerModel{BaseURL: provider.URL, ExternalID: "test"}
+	if _, _, err := requestOpenAIAgentDecision(context.Background(), provider.Client(), model, nil, "en", agentOperationInput{}, nil); err == nil || !strings.Contains(err.Error(), "origin") {
+		t.Fatalf("origin error=%v", err)
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("redirect followed") }))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer redirect.Close()
+	model.BaseURL = redirect.URL
+	if _, _, err := requestOpenAIAgentDecision(context.Background(), redirect.Client(), model, map[string]struct{}{redirect.URL: {}}, "en", agentOperationInput{}, nil); err == nil {
+		t.Fatal("redirect accepted")
+	}
+}
+
+func TestAgentDecisionParserRejectsMalformedUsageUnsafeAndRepeated(t *testing.T) {
+	wrap := func(content string, in, out int) []byte {
+		raw, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}, "usage": map[string]int{"prompt_tokens": in, "completion_tokens": out}})
+		return raw
+	}
+	prior := []planStep{{Executable: "uptime"}}
+	for _, raw := range [][]byte{
+		wrap(`{"status":"complete","reason":"done","steps":[],"extra":true}`, 1, 1),
+		wrap(`{"status":"continue","reason":"x","steps":[{"description":"x","executable":"bash","args":[]}]}`, 1, 1),
+		wrap(`{"status":"continue","reason":"x","steps":[{"description":"x","executable":"uptime","args":[]}]}`, 1, 1),
+		wrap(`{"status":"complete","reason":"done","steps":[]}`, 0, 0),
+	} {
+		if _, _, err := parseAgentDecisionResponse(raw, prior); err == nil {
+			t.Fatal("invalid agent response accepted")
+		}
+	}
+}
+
+func TestAgentLoopLimitsPositionsAndDuplicates(t *testing.T) {
+	if canRequestAgentDecision(maxAgentRounds, 3) || canRequestAgentDecision(0, maxOperationSteps) || !canRequestAgentDecision(3, 11) {
+		t.Fatal("agent limits broken")
+	}
+	steps := []planStep{{Executable: "uptime"}, {Executable: "du", Args: []string{"-sh", "--", "/backup"}}}
+	if hasDuplicateCommands(steps, []planStep{{Executable: "uptime"}}) == false || hasDuplicateCommands(steps[1:], nil) {
+		t.Fatal("command duplicate detection broken")
+	}
+	positions := nextStepPositions(8, 4)
+	if len(positions) != 4 || positions[0] != 9 || positions[3] != 12 {
+		t.Fatalf("positions=%v", positions)
 	}
 }
 

@@ -30,6 +30,7 @@ import {
   type Server,
   type ServerSummaryDTO,
 } from "../api/servers";
+import { useDialog } from "../ui/DialogProvider";
 
 const cn = (...values: Array<string | false | undefined>) =>
   values.filter(Boolean).join(" ");
@@ -567,6 +568,7 @@ function Field({
 export function ServerDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const dialog = useDialog();
   const [server, setServer] = useState<Server | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -620,15 +622,18 @@ export function ServerDetailPage() {
     }
   };
   const remove = async () => {
-    if (!window.confirm(`Delete ${server?.name}?`)) return;
+    if (deleting || !server) return;
     setDeleting(true);
+    if (!await dialog.confirm({ title: "Delete server?", description: `${server.name} will be removed from this workspace. Existing operation history remains available.`, confirmLabel: "Delete server", tone: "destructive" })) { setDeleting(false); return; }
     setActionError("");
     try {
       await serversApi.remove(id);
       navigate("/servers", { replace: true });
     } catch (caught) {
-      setActionError(message(caught));
+      const description = message(caught);
+      setActionError(description);
       setDeleting(false);
+      await dialog.notice({ title: "Unable to delete server", description, tone: "destructive" });
     }
   };
   if (loading || loadError || !server)

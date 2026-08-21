@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage, RecentChats } from './ChatPages'
+import { DialogProvider } from '../ui/DialogProvider'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 const server = { id: 'srv-real-uuid', name: 'Edge One', host: 'edge.example.com', port: 22, ssh_user: 'ops', auth_method: 'ssh_key', environment: 'production', status: 'online', region: 'eu', host_fingerprint: '' }
@@ -21,7 +22,7 @@ function ThreadDestination() {
 }
 
 function renderWithThreads(node: React.ReactNode, route = '/chat') {
-  return render(<MemoryRouter initialEntries={[route]}><ChatThreadsProvider>{node}</ChatThreadsProvider></MemoryRouter>)
+  return render(<MemoryRouter initialEntries={[route]}><DialogProvider><ChatThreadsProvider>{node}</ChatThreadsProvider></DialogProvider></MemoryRouter>)
 }
 
 describe('real chat workspace', () => {
@@ -381,9 +382,86 @@ describe('real chat workspace', () => {
     })
     renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
     await userEvent.click(await screen.findByRole('button', { name: 'Approve & run' }))
+    await userEvent.click(screen.getByRole('dialog', { name: 'Approve server operation?' }).querySelector<HTMLButtonElement>('.dialog-confirm')!)
     await waitFor(() => expect(operationLists).toBeGreaterThan(1))
     expect((await screen.findAllByText('running')).length).toBeGreaterThan(0)
     expect(screen.getByText('Read load average')).toBeInTheDocument()
+  })
+
+  it('shows every step and command before approval and calls API only after confirmation', async () => {
+    const detailedOperation = { ...operation, steps: [
+      { id: 'step-1', title: 'Read load average', status: 'pending', command: 'uptime' },
+      { id: 'step-2', title: 'Inspect processes', status: 'pending', command: 'ps aux --sort=-%cpu' },
+    ] }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/operations?')) return json({ operations: [detailedOperation] })
+      if (url.endsWith('/approve') && init?.method === 'POST') return json({ id: operation.id, status: 'approved' })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve & run' }))
+    const modal = screen.getByRole('dialog', { name: 'Approve server operation?' })
+    expect(within(modal).getByText(/Edge One.*bounded read-only investigation/)).toBeInTheDocument()
+    expect(within(modal).getByText('Read load average')).toBeInTheDocument()
+    expect(within(modal).getByText('uptime')).toBeInTheDocument()
+    expect(within(modal).getByText('Inspect processes')).toBeInTheDocument()
+    expect(within(modal).getByText('ps aux --sort=-%cpu')).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/approve'))).toBe(false)
+    await userEvent.click(within(modal).getByRole('button', { name: 'Approve & run' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/approve'))).toBe(true))
+  })
+
+  it('confirms chat deletion before calling API', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/operations?')) return json({ operations: [] })
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    await userEvent.click(await screen.findByRole('button', { name: 'Thread actions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.getByRole('dialog', { name: 'Delete chat?' })).toBeInTheDocument()
+    expect(fetchMock.mock.calls.some(([url],) => String(url).endsWith('/chat/threads/thread-1') && fetchMock.mock.calls.find(call => call[0] === url)?.[1]?.method === 'DELETE')).toBe(false)
+    await userEvent.click(screen.getByRole('button', { name: 'Delete chat' }))
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/chat/threads/thread-1') && init?.method === 'DELETE')).toBe(true))
+  })
+
+  it('refreshes flow on agent events, shows thinking stage, new steps, and round', async () => {
+    class EventSourceMock {
+      static instance: EventSourceMock
+      onopen: (() => void) | null = null; onerror: (() => void) | null = null; listeners: Record<string, (event: MessageEvent) => void> = {}
+      constructor() { EventSourceMock.instance = this }
+      addEventListener(type: string, listener: EventListener) { this.listeners[type] = listener as (event: MessageEvent) => void }
+      close() {}
+      emit(type: string, data: object, id: string) { this.listeners[type]?.({ data: JSON.stringify(data), lastEventId: id, type } as MessageEvent) }
+    }
+    vi.stubGlobal('EventSource', EventSourceMock)
+    let operationLists = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/operations?')) {
+        operationLists += 1
+        const steps = operationLists > 1 ? [...operation.steps, { id: 'step-2', title: 'Inspect processes', status: 'pending', command: 'ps aux' }] : operation.steps
+        return json({ operations: [{ ...operation, status: 'planning', agent_round: 2, steps }] })
+      }
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    await screen.findByText('Round 2')
+    await waitFor(() => expect(EventSourceMock.instance).toBeDefined())
+    await act(async () => EventSourceMock.instance.emit('agent.thinking', {}, '40'))
+    expect(screen.getByText('AI determining next step').closest('li')).toHaveClass('current')
+    await act(async () => EventSourceMock.instance.emit('flow.updated', {}, '41'))
+    await waitFor(() => expect(operationLists).toBeGreaterThan(1))
+    expect(await screen.findByText('Inspect processes')).toBeInTheDocument()
+    vi.unstubAllGlobals()
   })
 
   it('shows only streamed terminal output, including stderr', async () => {

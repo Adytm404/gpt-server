@@ -48,6 +48,7 @@ export type Operation = {
   createdAt?: string
   startedAt?: string
   completedAt?: string
+  agentRound?: number
 }
 
 export type OperationEvent = {
@@ -108,7 +109,7 @@ export function operationFromDTO(value: unknown): Operation {
   const dto = (value || {}) as AnyDTO
   const server = (dto.server || {}) as AnyDTO
   const rawSteps = Array.isArray(dto.steps) ? dto.steps : Array.isArray(dto.plan) ? dto.plan : []
-  return { id: text(dto.id), threadId: text(dto.thread_id) || undefined, serverId: text(dto.server_id ?? server.id) || undefined, serverName: text(dto.server_name ?? server.name) || undefined, title: text(dto.title ?? dto.name ?? dto.prompt, 'Operation'), summary: text(dto.summary) || undefined, status: text(dto.status, 'planning'), steps: rawSteps.map(stepFromDTO), exitCode: number(dto.exit_code), error: text(dto.error) || undefined, createdAt: text(dto.created_at) || undefined, startedAt: text(dto.started_at) || undefined, completedAt: text(dto.finished_at ?? dto.completed_at) || undefined }
+  return { id: text(dto.id), threadId: text(dto.thread_id) || undefined, serverId: text(dto.server_id ?? server.id) || undefined, serverName: text(dto.server_name ?? server.name) || undefined, title: text(dto.title ?? dto.name ?? dto.prompt, 'Operation'), summary: text(dto.summary) || undefined, status: text(dto.status, 'planning'), steps: rawSteps.map(stepFromDTO), exitCode: number(dto.exit_code), error: text(dto.error) || undefined, createdAt: text(dto.created_at) || undefined, startedAt: text(dto.started_at) || undefined, completedAt: text(dto.finished_at ?? dto.completed_at) || undefined, agentRound: number(dto.agent_round) }
 }
 
 function operationFromResponse(body: unknown): Operation | undefined {

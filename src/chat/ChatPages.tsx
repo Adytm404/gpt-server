@@ -3,14 +3,16 @@ import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Command, Download, MessageSquare, MoreHorizontal, Play, Plus, Server as ServerIcon, ShieldCheck, Sparkles, Square, Terminal } from 'lucide-react'
 import { chatApi, operationEventFromMessage, operationEventsUrl, reduceOperationEvents, type ChatConfig, type ChatMessage, type ChatPolicy, type ChatThread, type Operation, type OperationEvent } from '../api/chat'
 import { serversApi, type Server } from '../api/servers'
+import { MarkdownMessage } from './MarkdownMessage'
+import { useDialog } from '../ui/DialogProvider'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
 const finalStatuses = new Set(['succeeded', 'completed', 'failed', 'cancelled', 'canceled', 'rejected'])
 const busyStatuses = new Set(['planning', 'planned', 'approved', 'queued', 'running', 'executing', 'summarizing'])
 const approvalStatuses = new Set(['pending_approval', 'awaiting_approval', 'requires_approval'])
-const operationEventTypes = ['planning', 'plan_ready', 'approved', 'running', 'step.started', 'stdout', 'stderr', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'assistant.delta', 'summary.started', 'summary.completed', 'summary.failed', 'summarizing']
+const operationEventTypes = ['planning', 'plan_ready', 'approved', 'running', 'step.started', 'stdout', 'stderr', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'assistant.delta', 'summary.started', 'summary.completed', 'summary.failed', 'summarizing', 'agent.thinking', 'flow.updated']
 const streamFinalEventTypes = new Set(['summary.completed', 'summary.failed', 'cancelled', 'rejected'])
-const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'running', 'step.started', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'summary.started', 'summary.completed', 'summary.failed'])
+const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'running', 'step.started', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'summary.started', 'summary.completed', 'summary.failed', 'agent.thinking', 'flow.updated'])
 
 const policies: Array<{ value: ChatPolicy; label: string; description: string }> = [
   { value: 'approval_required', label: 'Approval required', description: 'AI plans commands; explicit approval; SSH executes.' },
@@ -197,7 +199,8 @@ function useOperationEvents(operation: Operation | null, onState: () => void) {
   const summaryText = summaryEvents.filter(event => event.type === 'assistant.delta').map(event => event.text).join('') || [...summaryEvents].reverse().find(event => event.type === 'summary.failed' && event.text)?.text || ''
   const summaryMessageId = [...summaryEvents].reverse().find(event => event.messageId)?.messageId
   const summaryPhase = summaryEvents.some(event => event.type === 'summary.failed') ? 'failed' : summaryEvents.some(event => event.type === 'summary.completed') ? 'completed' : summaryEvents.length ? 'summarizing' : 'idle'
-  return { events, connection, summaryText, summaryMessageId, summaryPhase }
+  const agentThinking = [...events].reverse().find(event => ['agent.thinking', 'flow.updated', 'step.started', 'step.completed', 'step.failed', 'summary.started', 'summarizing', 'summary.completed', 'summary.failed', 'completed', 'failed', 'cancelled'].includes(event.type))?.type === 'agent.thinking'
+  return { events, connection, summaryText, summaryMessageId, summaryPhase, agentThinking }
 }
 
 const operationStages = ['Request received', 'AI determining action', 'Flow ready', 'Executing', 'Explanation'] as const
@@ -211,18 +214,20 @@ function operationStageStates(status: string, summarizing: boolean): Array<'done
   return ['done', 'current', 'pending', 'pending', 'pending']
 }
 
-function OperationCard({ operation, summarizing, mutate }: { operation: Operation; summarizing: boolean; mutate?: (action: 'approve' | 'reject' | 'cancel') => Promise<void> }) {
+function OperationCard({ operation, summarizing, agentThinking, actionPending, mutate }: { operation: Operation; summarizing: boolean; agentThinking?: boolean; actionPending?: boolean; mutate?: (action: 'approve' | 'reject' | 'cancel') => Promise<void> }) {
   const completed = operation.steps.filter(step => ['completed', 'succeeded', 'success'].includes(step.status)).length
   const progress = summarizing ? 100 : operation.steps.length ? Math.round(completed / operation.steps.length * 100) : 0
   const pendingApproval = approvalStatuses.has(operation.status)
   const stageStates = operationStageStates(operation.status, summarizing)
-  return <div className="plan-card"><div className="plan-head"><div><i><Command size={17} /></i><span><strong>{operation.title}</strong><small>{operation.steps.length} steps / {operation.status.replaceAll('_', ' ')}</small></span></div><span className={cn('risk-badge', finalStatuses.has(operation.status) && 'complete')}><ShieldCheck size={13} /> {operation.status.replaceAll('_', ' ')}</span></div>
-    <ol className="operation-stages" data-testid="operation-stages">{operationStages.map((stage, index) => <li key={stage} data-state={stageStates[index]} className={stageStates[index]}><i>{stageStates[index] === 'done' ? <Check size={10} /> : index + 1}</i><span>{stage}</span></li>)}</ol>
+  if (agentThinking) stageStates.splice(0, stageStates.length, 'done', 'current', 'pending', 'pending', 'pending')
+  const stages = operationStages.map((stage, index) => index === 1 && agentThinking ? 'AI determining next step' : stage)
+  return <div className="plan-card"><div className="plan-head"><div><i><Command size={17} /></i><span><strong>{operation.title}</strong><small>{operation.steps.length} steps / {operation.status.replaceAll('_', ' ')}</small></span></div><div className="plan-badges">{operation.agentRound != null && <span className="round-badge">Round {operation.agentRound}</span>}<span className={cn('risk-badge', finalStatuses.has(operation.status) && 'complete')}><ShieldCheck size={13} /> {operation.status.replaceAll('_', ' ')}</span></div></div>
+    <ol className="operation-stages" data-testid="operation-stages">{stages.map((stage, index) => <li key={index} data-state={stageStates[index]} className={stageStates[index]}><i>{stageStates[index] === 'done' ? <Check size={10} /> : index + 1}</i><span>{stage}</span></li>)}</ol>
     {(busyStatuses.has(operation.status) || summarizing) && <div className="operation-progress"><div><span>Operation progress</span><b>{progress}%</b></div><i><b style={{ width: `${progress}%` }} /></i><small>{summarizing ? 'Commands complete. Generating explanation...' : `${completed} of ${operation.steps.length} steps completed`}</small></div>}
-    {operation.summary && <p className="operation-summary">{operation.summary}</p>}
+    {operation.summary && <div className="operation-summary"><MarkdownMessage>{operation.summary}</MarkdownMessage></div>}
     <div className="plan-steps">{operation.steps.map((step, index) => <div key={step.id} className={cn(['completed', 'succeeded', 'success'].includes(step.status) && 'done', step.status === 'running' && 'running')}><i>{['completed', 'succeeded', 'success'].includes(step.status) ? <Check size={13} /> : index + 1}</i><span>{step.title}{step.command && <code className="plan-command">{step.command}</code>}{step.stdout && <code className="plan-step-output">{step.stdout}</code>}{step.stderr && <code className="plan-step-output stderr">{step.stderr}</code>}</span><b>{step.exitCode != null ? `${step.status} (${step.exitCode})` : step.status}</b></div>)}</div>
     {operation.error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {operation.error}</div>}
-    {pendingApproval && mutate && <div className="plan-actions"><button className="button secondary" onClick={() => void mutate('reject')}>Reject</button><button className="button dark" onClick={() => void mutate('approve')}><Play size={13} /> Approve & run</button></div>}
+    {pendingApproval && mutate && <div className="plan-actions"><button className="button secondary" disabled={actionPending} onClick={() => void mutate('reject')}>Reject</button><button className="button dark" disabled={actionPending} onClick={() => void mutate('approve')}><Play size={13} /> Approve & run</button></div>}
   </div>
 }
 
@@ -292,7 +297,7 @@ function buildTimeline(messages: ChatMessage[], operations: Operation[], hiddenM
   return items
 }
 
-function ExecutionPanel({ operation, events, connection, cancel }: { operation: Operation; events: OperationEvent[]; connection: string; cancel: () => Promise<void> }) {
+function ExecutionPanel({ operation, events, connection, cancel, actionPending }: { operation: Operation; events: OperationEvent[]; connection: string; cancel: () => Promise<void>; actionPending: boolean }) {
   const [filter, setFilter] = useState<'session' | 'stderr'>('session')
   const output = filter === 'stderr' ? events.filter(event => event.type === 'stderr') : events.filter(event => ['stdout', 'stderr', 'command', 'system', 'message'].includes(event.type))
   const download = () => {
@@ -301,7 +306,7 @@ function ExecutionPanel({ operation, events, connection, cancel }: { operation: 
   }
   return <aside className="execution-panel"><div className="execution-head"><div><span className={cn('execution-state', busyStatuses.has(operation.status) && 'running', finalStatuses.has(operation.status) && 'complete')}><i />{operation.status.replaceAll('_', ' ')}</span><h3>SSH terminal</h3></div><button className="icon-button" onClick={download} aria-label="Download log"><Download size={16} /></button></div><div className="execution-context"><span><ServerIcon size={14} /> {operation.serverName || operation.serverId || 'Server scope unavailable'}</span><span><Clock3 size={14} /> {connection}</span></div>
     <div className="terminal"><div className="terminal-toolbar"><span>Operation event stream</span><div><button className={filter === 'session' ? 'active' : ''} onClick={() => setFilter('session')}>session</button><button className={filter === 'stderr' ? 'active' : ''} onClick={() => setFilter('stderr')}>stderr</button></div></div><div className="terminal-lines">{output.length === 0 ? <div className="terminal-filter-empty"><Terminal size={22} /><strong>No {filter === 'stderr' ? 'stderr ' : ''}output yet</strong><span>{connection === 'reconnecting' ? 'Reconnecting to event stream...' : 'Waiting for operation events.'}</span></div> : output.map((event, index) => <div className={cn('log-line', event.type)} key={event.id || index}><span className="log-time">{event.createdAt ? new Date(event.createdAt).toLocaleTimeString() : ''}</span><code>{event.text || ' '}</code></div>)}</div></div>
-    <div className="execution-foot"><span>{operation.exitCode != null ? <><CheckCircle2 size={15} /> Exit code {operation.exitCode}</> : connection === 'reconnecting' ? 'Reconnecting...' : connection}</span>{busyStatuses.has(operation.status) && <button onClick={() => void cancel()}><Square size={12} fill="currentColor" /> Stop</button>}</div>
+    <div className="execution-foot"><span>{operation.exitCode != null ? <><CheckCircle2 size={15} /> Exit code {operation.exitCode}</> : connection === 'reconnecting' ? 'Reconnecting...' : connection}</span>{busyStatuses.has(operation.status) && <button disabled={actionPending} onClick={() => void cancel()}><Square size={12} fill="currentColor" /> Stop</button>}</div>
   </aside>
 }
 
@@ -310,6 +315,7 @@ export function ChatThreadPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { refresh: refreshThreads } = useChatThreads()
+  const dialog = useDialog()
   const [thread, setThread] = useState<ChatThread | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [operations, setOperations] = useState<Operation[]>([])
@@ -317,6 +323,7 @@ export function ChatThreadPage() {
   const [error, setError] = useState('')
   const [menu, setMenu] = useState(false)
   const [pending, setPending] = useState<{ id: string; content: string; policy: ChatPolicy } | null>(null)
+  const [actionPending, setActionPending] = useState(false)
   const mounted = useRef(true)
   const currentId = useRef(id)
   const loadGeneration = useRef(0)
@@ -345,15 +352,31 @@ export function ChatThreadPage() {
     if (!Number.isFinite(latestTime) && !Number.isFinite(candidateTime)) return latest
     return candidateTime > latestTime ? candidate : latest
   }, null)
-  const { events, connection, summaryText, summaryMessageId, summaryPhase } = useOperationEvents(operation, () => { void load() })
+  const { events, connection, summaryText, summaryMessageId, summaryPhase, agentThinking } = useOperationEvents(operation, () => { void load() })
   const mutate = async (action: 'approve' | 'reject' | 'cancel') => {
-    if (!operation) return
+    if (!operation || actionPending) return
+    setActionPending(true)
+    const confirmed = await dialog.confirm(action === 'approve' ? {
+      title: 'Approve server operation?',
+      description: `${operation.serverName || thread?.serverName || 'Selected server'} will run a bounded read-only investigation: these commands, then safe read-only checks within 4 decision rounds and 12 total steps. No writes or unrestricted shell access.`,
+      confirmLabel: 'Approve & run', tone: 'accent',
+      details: operation.steps.map(step => ({ title: step.title, detail: step.command || 'No command supplied' })),
+    } : action === 'reject' ? {
+      title: 'Reject server operation?', description: 'This plan will not run. You can submit a revised request afterward.', confirmLabel: 'Reject operation', tone: 'destructive',
+    } : {
+      title: 'Cancel running operation?', description: 'Execution will stop after the current command can be interrupted safely.', confirmLabel: 'Cancel operation', tone: 'destructive',
+    })
+    if (!confirmed) { setActionPending(false); return }
     try {
       if (action === 'approve') await chatApi.approveOperation(operation.id)
       else if (action === 'reject') await chatApi.rejectOperation(operation.id)
       else await chatApi.cancelOperation(operation.id)
       await load()
-    } catch (caught) { setError(caught instanceof Error ? caught.message : `Unable to ${action} operation`) }
+    } catch (caught) {
+      const description = caught instanceof Error ? caught.message : `Unable to ${action} operation`
+      setError(description)
+      await dialog.notice({ title: `Unable to ${action} operation`, description, tone: 'destructive' })
+    } finally { setActionPending(false) }
   }
   const followUp = async (content: string, policy: ChatPolicy) => {
     if (pending) return
@@ -383,24 +406,39 @@ export function ChatThreadPage() {
     if (itemIds !== renderedItems.current) endRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'end' })
     renderedItems.current = itemIds
   }, [messages, operations, pending?.id, summaryPhase])
-  const rename = async () => { if (!thread) return; const title = window.prompt('Thread title', thread.title)?.trim(); if (!title) return; await chatApi.updateThread(id, { title, status: 'active' }); setMenu(false); await load(); await refreshThreads() }
+  const rename = async () => {
+    if (!thread || actionPending) return
+    setActionPending(true)
+    const title = (await dialog.prompt({ title: 'Rename chat', description: 'Give this operational thread a concise title.', label: 'Thread title', initialValue: thread.title, confirmLabel: 'Save title' }))?.trim()
+    if (!title) { setActionPending(false); return }
+    try { await chatApi.updateThread(id, { title, status: 'active' }); setMenu(false); await load(); await refreshThreads() }
+    catch (caught) { const description = caught instanceof Error ? caught.message : 'Unable to rename chat'; setError(description); await dialog.notice({ title: 'Unable to rename chat', description, tone: 'destructive' }) }
+    finally { setActionPending(false) }
+  }
   const archive = async () => { if (!thread || busy) return; const title = thread.title; await chatApi.updateThread(id, { title, status: 'archived' }); await refreshThreads(); navigate('/chat') }
-  const remove = async () => { if (busy) return; if (!window.confirm('Delete this chat permanently?')) return; await chatApi.deleteThread(id); await refreshThreads(); navigate('/chat') }
+  const remove = async () => {
+    if (busy || actionPending) return
+    setActionPending(true)
+    if (!await dialog.confirm({ title: 'Delete chat?', description: `“${thread!.title}” and its conversation history will be permanently removed.`, confirmLabel: 'Delete chat', tone: 'destructive' })) { setActionPending(false); return }
+    try { await chatApi.deleteThread(id); await refreshThreads(); navigate('/chat') }
+    catch (caught) { const description = caught instanceof Error ? caught.message : 'Unable to delete chat'; setError(description); await dialog.notice({ title: 'Unable to delete chat', description, tone: 'destructive' }) }
+    finally { setActionPending(false) }
+  }
   if (loading) return <div className="content-page"><p>Loading chat...</p></div>
   if (!thread) return <div className="content-page"><div className="auth-error" role="alert">{error || 'Chat not found'}</div></div>
   const busy = operation ? busyStatuses.has(operation.status) || approvalStatuses.has(operation.status) || summaryPhase === 'summarizing' : false
   const summaryPersisted = messages.some(message => message.role === 'assistant' && ((summaryMessageId && message.id === summaryMessageId) || (summaryText && message.content === summaryText)))
   const showStreamedSummary = summaryPhase !== 'idle' && !summaryPersisted && (summaryPhase === 'summarizing' || Boolean(summaryText))
   const timeline = buildTimeline(messages, operations, showStreamedSummary ? summaryMessageId : undefined)
-  const renderMessage = (message: ChatMessage) => <div className={cn('message', message.role === 'user' ? 'user-message right-message' : 'ai-message left-message', message.kind === 'result' && 'result-message')} key={message.id} data-testid={`message-${message.id}`}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div><p>{message.content}</p>{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>
-  const renderStreamedSummary = () => <div className="message ai-message left-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI sedang menjelaskan hasil...</span>}</div><p>{summaryText}{summaryPhase === 'summarizing' && <i className="summary-cursor" aria-hidden="true" />}</p></div></div>
-  return <div className="thread-layout page-enter"><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div><div className="thread-menu"><button className="icon-button bordered" onClick={() => setMenu(value => !value)} aria-label="Thread actions"><MoreHorizontal size={18} /></button>{menu && <div><button onClick={() => void rename()}>Rename</button>{busy ? <span className="thread-menu-blocked">Cancel operation first to archive or delete.</span> : <><button onClick={() => void archive()}>Archive</button><button className="danger" onClick={() => void remove()}>Delete</button></>}</div>}</div></div>
+  const renderMessage = (message: ChatMessage) => <div className={cn('message', message.role === 'user' ? 'user-message right-message' : 'ai-message left-message', message.kind === 'result' && 'result-message')} key={message.id} data-testid={`message-${message.id}`}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div>{message.role === 'user' ? <p>{message.content}</p> : <MarkdownMessage>{message.content}</MarkdownMessage>}{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>
+  const renderStreamedSummary = () => <div className="message ai-message left-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI sedang menjelaskan hasil...</span>}</div><MarkdownMessage streaming={summaryPhase === 'summarizing'}>{summaryText}</MarkdownMessage></div></div>
+  return <div className="thread-layout page-enter"><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div><div className="thread-menu"><button className="icon-button bordered" disabled={actionPending} onClick={() => setMenu(value => !value)} aria-label="Thread actions"><MoreHorizontal size={18} /></button>{menu && <div><button disabled={actionPending} onClick={() => void rename()}>Rename</button>{busy ? <span className="thread-menu-blocked">Cancel operation first to archive or delete.</span> : <><button disabled={actionPending} onClick={() => void archive()}>Archive</button><button className="danger" disabled={actionPending} onClick={() => void remove()}>Delete</button></>}</div>}</div></div>
     {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
-    <div className="conversation">{messages.length === 0 && operations.length === 0 && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{timeline.map(item => item.type === 'message' ? renderMessage(item.message) : <Fragment key={item.operation.id}><div className="message ai-message left-message operation-message" data-testid={`operation-${item.operation.id}`}><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={item.operation} summarizing={item.operation.id === operation?.id && summaryPhase === 'summarizing'} mutate={item.operation.id === operation?.id ? mutate : undefined} /></div></div>{showStreamedSummary && item.operation.id === operation?.id && renderStreamedSummary()}</Fragment>)}
+    <div className="conversation">{messages.length === 0 && operations.length === 0 && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{timeline.map(item => item.type === 'message' ? renderMessage(item.message) : <Fragment key={item.operation.id}><div className="message ai-message left-message operation-message" data-testid={`operation-${item.operation.id}`}><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={item.operation} summarizing={item.operation.id === operation?.id && summaryPhase === 'summarizing'} agentThinking={item.operation.id === operation?.id && agentThinking} actionPending={actionPending} mutate={item.operation.id === operation?.id ? mutate : undefined} /></div></div>{showStreamedSummary && item.operation.id === operation?.id && renderStreamedSummary()}</Fragment>)}
     {pending && <><div className="message user-message right-message" key={pending.id}><div className="message-avatar">YOU</div><div className="message-content"><div className="message-meta"><strong>You</strong><span>now</span></div><p>{pending.content}</p><span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span></div></div><div className="message ai-message left-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong><span className="tiny-spinner" /></div><p>{pending.policy === 'explain_only' ? 'OpsAI sedang menganalisis snapshot server...' : 'OpsAI sedang memahami permintaan dan menentukan langkah...'}</p></div></div></>}
     <div ref={endRef} /></div>
     <div className="thread-composer"><Composer compact servers={[]} selectedServer={thread.serverId} onSubmit={followUp} disabled={busy || Boolean(pending)} disabledReason={busy ? `Follow-up unavailable while operation is ${operation?.status.replaceAll('_', ' ')}.` : ''} /></div></section>
-    {operation && <ExecutionPanel operation={operation} events={events} connection={connection} cancel={() => mutate('cancel')} />}
+    {operation && <ExecutionPanel operation={operation} events={events} connection={connection} cancel={() => mutate('cancel')} actionPending={actionPending} />}
   </div>
 }
 
