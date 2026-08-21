@@ -10,12 +10,13 @@ const cn = (...values: Array<string | false | undefined>) => values.filter(Boole
 const finalStatuses = new Set(['succeeded', 'completed', 'failed', 'cancelled', 'canceled', 'rejected'])
 const busyStatuses = new Set(['planning', 'planned', 'approved', 'queued', 'running', 'executing', 'summarizing'])
 const approvalStatuses = new Set(['pending_approval', 'awaiting_approval', 'requires_approval'])
-const operationEventTypes = ['planning', 'plan_ready', 'approved', 'running', 'step.started', 'stdout', 'stderr', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'assistant.delta', 'summary.started', 'summary.completed', 'summary.failed', 'summarizing', 'agent.thinking', 'flow.updated']
+const operationEventTypes = ['planning', 'plan_ready', 'approved', 'approval.required', 'retry.requested', 'running', 'step.started', 'stdout', 'stderr', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'assistant.delta', 'summary.started', 'summary.completed', 'summary.failed', 'summarizing', 'agent.thinking', 'flow.updated']
 const streamFinalEventTypes = new Set(['summary.completed', 'summary.failed', 'cancelled', 'rejected'])
-const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'running', 'step.started', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'summary.started', 'summary.completed', 'summary.failed', 'agent.thinking', 'flow.updated'])
+const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'approval.required', 'retry.requested', 'running', 'step.started', 'step.completed', 'completed', 'failed', 'cancelled', 'rejected', 'summary.started', 'summary.completed', 'summary.failed', 'agent.thinking', 'flow.updated'])
 
 const policies: Array<{ value: ChatPolicy; label: string; description: string }> = [
   { value: 'approval_required', label: 'Approval required', description: 'AI plans commands; explicit approval; SSH executes.' },
+  { value: 'unrestricted_approval', label: 'Full access', description: 'Arbitrary shell commands; every AI command batch requires explicit approval.' },
   { value: 'explain_only', label: 'Explain only', description: 'Analyze latest stored server context only. No commands will run.' },
 ]
 
@@ -214,7 +215,7 @@ function operationStageStates(status: string, summarizing: boolean): Array<'done
   return ['done', 'current', 'pending', 'pending', 'pending']
 }
 
-function OperationCard({ operation, summarizing, agentThinking, actionPending, mutate }: { operation: Operation; summarizing: boolean; agentThinking?: boolean; actionPending?: boolean; mutate?: (action: 'approve' | 'reject' | 'cancel') => Promise<void> }) {
+function OperationCard({ operation, summarizing, agentThinking, actionPending, mutate }: { operation: Operation; summarizing: boolean; agentThinking?: boolean; actionPending?: boolean; mutate?: (action: 'approve' | 'reject' | 'cancel' | 'retry') => Promise<void> }) {
   const completed = operation.steps.filter(step => ['completed', 'succeeded', 'success'].includes(step.status)).length
   const progress = summarizing ? 100 : operation.steps.length ? Math.round(completed / operation.steps.length * 100) : 0
   const pendingApproval = approvalStatuses.has(operation.status)
@@ -228,6 +229,7 @@ function OperationCard({ operation, summarizing, agentThinking, actionPending, m
     <div className="plan-steps">{operation.steps.map((step, index) => <div key={step.id} className={cn(['completed', 'succeeded', 'success'].includes(step.status) && 'done', step.status === 'running' && 'running')}><i>{['completed', 'succeeded', 'success'].includes(step.status) ? <Check size={13} /> : index + 1}</i><span>{step.title}{step.command && <code className="plan-command">{step.command}</code>}{step.stdout && <code className="plan-step-output">{step.stdout}</code>}{step.stderr && <code className="plan-step-output stderr">{step.stderr}</code>}</span><b>{step.exitCode != null ? `${step.status} (${step.exitCode})` : step.status}</b></div>)}</div>
     {operation.error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {operation.error}</div>}
     {pendingApproval && mutate && <div className="plan-actions"><button className="button secondary" disabled={actionPending} onClick={() => void mutate('reject')}>Reject</button><button className="button dark" disabled={actionPending} onClick={() => void mutate('approve')}><Play size={13} /> Approve & run</button></div>}
+    {operation.status === 'failed' && mutate && <div className="plan-actions"><button className="button dark" disabled={actionPending} onClick={() => void mutate('retry')}>Retry operation</button></div>}
   </div>
 }
 
@@ -353,14 +355,16 @@ export function ChatThreadPage() {
     return candidateTime > latestTime ? candidate : latest
   }, null)
   const { events, connection, summaryText, summaryMessageId, summaryPhase, agentThinking } = useOperationEvents(operation, () => { void load() })
-  const mutate = async (action: 'approve' | 'reject' | 'cancel') => {
+  const mutate = async (action: 'approve' | 'reject' | 'cancel' | 'retry') => {
     if (!operation || actionPending) return
     setActionPending(true)
     const confirmed = await dialog.confirm(action === 'approve' ? {
       title: 'Approve server operation?',
-      description: `${operation.serverName || thread?.serverName || 'Selected server'} will run a bounded read-only investigation: these commands, then safe read-only checks within 4 decision rounds and 12 total steps. No writes or unrestricted shell access.`,
+      description: operation.policy === 'unrestricted_approval' ? `${operation.serverName || thread?.serverName || 'Selected server'} will run unrestricted shell commands shown below. Commands can modify or delete data, install software, access credentials, and make network requests. Approve only commands you fully trust.` : `${operation.serverName || thread?.serverName || 'Selected server'} will run a bounded read-only investigation: these commands, then safe read-only checks within 4 decision rounds and 12 total steps. No writes or unrestricted shell access.`,
       confirmLabel: 'Approve & run', tone: 'accent',
-      details: operation.steps.map(step => ({ title: step.title, detail: step.command || 'No command supplied' })),
+      details: (operation.steps.some(step => step.status === 'pending') ? operation.steps.filter(step => step.status === 'pending') : operation.steps).map(step => ({ title: step.title, detail: step.command || 'No command supplied' })),
+    } : action === 'retry' ? {
+      title: 'Retry failed operation?', description: 'Pending checks will resume. If none remain, the last failed command will run again after approval.', confirmLabel: 'Prepare retry', tone: 'accent',
     } : action === 'reject' ? {
       title: 'Reject server operation?', description: 'This plan will not run. You can submit a revised request afterward.', confirmLabel: 'Reject operation', tone: 'destructive',
     } : {
@@ -370,7 +374,8 @@ export function ChatThreadPage() {
     try {
       if (action === 'approve') await chatApi.approveOperation(operation.id)
       else if (action === 'reject') await chatApi.rejectOperation(operation.id)
-      else await chatApi.cancelOperation(operation.id)
+      else if (action === 'cancel') await chatApi.cancelOperation(operation.id)
+      else await chatApi.retryOperation(operation.id)
       await load()
     } catch (caught) {
       const description = caught instanceof Error ? caught.message : `Unable to ${action} operation`

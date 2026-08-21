@@ -558,8 +558,28 @@ func TestOpenAIIntentRouterRetriesTransientProviderFailure(t *testing.T) {
 }
 
 func TestChatPolicies(t *testing.T) {
-	if !validChatPolicy("approval_required") || !validChatPolicy("explain_only") || validChatPolicy("read_only") || validChatPolicy("") {
+	if !validChatPolicy("approval_required") || !validChatPolicy("explain_only") || !validChatPolicy("unrestricted_approval") || validChatPolicy("read_only") || validChatPolicy("") {
 		t.Fatal("chat policy validation contract broken")
+	}
+}
+
+func TestUnrestrictedCommandsRequireExplicitPolicy(t *testing.T) {
+	step := planStep{Description: "Install package", Executable: "sh", Args: []string{"-lc", "apt-get install -y nginx"}}
+	plan := operationPlan{Title: "Install nginx", Summary: "Install requested package", Risk: "high", Steps: []planStep{step}}
+	if validateOperationPlan(plan) == nil {
+		t.Fatal("default policy accepted unrestricted command")
+	}
+	if err := validateOperationPlanForPolicy(plan, "unrestricted_approval"); err != nil {
+		t.Fatalf("unrestricted plan rejected: %v", err)
+	}
+	command, err := serializeOperationCommand("unrestricted_approval", step.Executable, step.Args)
+	if err != nil || command != "'sh' '-lc' 'apt-get install -y nginx'" {
+		t.Fatalf("command=%q err=%v", command, err)
+	}
+	for _, args := range [][]string{{"-c", "id"}, {"-lc", ""}, {"-lc", strings.Repeat("x", 4001)}} {
+		if _, err := serializeOperationCommand("unrestricted_approval", "sh", args); err == nil {
+			t.Fatalf("unsafe shape accepted: %v", args)
+		}
 	}
 }
 

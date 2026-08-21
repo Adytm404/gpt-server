@@ -56,18 +56,30 @@ type operationPlan struct {
 }
 
 func validateOperationPlan(plan operationPlan) error {
-	if strings.TrimSpace(plan.Title) == "" || len(plan.Title) > 200 || strings.TrimSpace(plan.Summary) == "" || len(plan.Summary) > 2000 || (plan.Risk != "low" && plan.Risk != "medium") || len(plan.Steps) == 0 || len(plan.Steps) > maxPlanSteps {
+	return validateOperationPlanForPolicy(plan, "approval_required")
+}
+
+func validateOperationPlanForPolicy(plan operationPlan, policy string) error {
+	if strings.TrimSpace(plan.Title) == "" || len(plan.Title) > 200 || strings.TrimSpace(plan.Summary) == "" || len(plan.Summary) > 2000 || (plan.Risk != "low" && plan.Risk != "medium" && !(policy == "unrestricted_approval" && plan.Risk == "high")) || len(plan.Steps) == 0 || len(plan.Steps) > maxPlanSteps {
 		return errors.New("invalid operation plan")
 	}
 	for _, step := range plan.Steps {
 		if strings.TrimSpace(step.Description) == "" || len(step.Description) > 500 {
 			return errors.New("invalid operation step")
 		}
-		if err := validateReadOnlyCommand(step.Executable, step.Args); err != nil {
+		if err := validateCommandForPolicy(policy, step.Executable, step.Args); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func validateCommandForPolicy(policy, executable string, args []string) error {
+	if policy == "unrestricted_approval" {
+		_, err := serializeOperationCommand(policy, executable, args)
+		return err
+	}
+	return validateReadOnlyCommand(executable, args)
 }
 
 func validateReadOnlyCommand(executable string, args []string) error {

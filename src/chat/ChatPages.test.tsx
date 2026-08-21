@@ -50,7 +50,7 @@ describe('real chat workspace', () => {
     expect(requests.some(request => request.url.endsWith('/messages'))).toBe(false)
   })
 
-  it('offers only safe policies and sends exact explain_only body', async () => {
+  it('offers explicit policies and sends exact explain_only body', async () => {
     const requests: Array<Record<string, unknown>> = []
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input); const body = init?.body ? JSON.parse(String(init.body)) : undefined
@@ -64,8 +64,10 @@ describe('real chat workspace', () => {
     renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<ThreadDestination />} /></Routes>)
     await userEvent.click(await screen.findByRole('button', { name: 'Execution policy' }))
     const options = screen.getByRole('listbox', { name: 'Execution policy options' })
-    expect(within(options).getAllByRole('option')).toHaveLength(2)
+    expect(within(options).getAllByRole('option')).toHaveLength(3)
     expect(within(options).getByText('Approval required')).toBeInTheDocument()
+    expect(within(options).getByText('Full access')).toBeInTheDocument()
+    expect(within(options).getByText(/every AI command batch requires explicit approval/i)).toBeInTheDocument()
     expect(within(options).getByText('Explain only')).toBeInTheDocument()
     expect(screen.queryByText('Auto execute')).not.toBeInTheDocument()
     await userEvent.click(within(options).getByRole('option', { name: /Explain only/ }))
@@ -462,6 +464,24 @@ describe('real chat workspace', () => {
     await waitFor(() => expect(operationLists).toBeGreaterThan(1))
     expect(await screen.findByText('Inspect processes')).toBeInTheDocument()
     vi.unstubAllGlobals()
+  })
+
+  it('prepares a failed operation retry after confirmation', async () => {
+    const failed = { ...operation, status: 'failed', error: 'diagnostic step failed', steps: [{ ...operation.steps[0], status: 'failed' }] }
+    const requests: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/operations?')) return json({ operations: [failed] })
+      if (url.endsWith('/retry') && init?.method === 'POST') { requests.push(url); return json({ id: failed.id, status: 'pending_approval' }) }
+      if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
+      return json(thread)
+    })
+    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry operation' }))
+    expect(screen.getByRole('dialog', { name: 'Retry failed operation?' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Prepare retry' }))
+    await waitFor(() => expect(requests).toHaveLength(1))
   })
 
   it('shows only streamed terminal output, including stderr', async () => {

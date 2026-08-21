@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -32,6 +33,7 @@ func (s *server) operationRoutes(r chi.Router) {
 	r.With(s.requireMutation).Post("/{id}/approve", s.requireWorkspaceAction("operate", s.approveOperation))
 	r.With(s.requireMutation).Post("/{id}/reject", s.requireWorkspaceAction("operate", s.rejectOperation))
 	r.With(s.requireMutation).Post("/{id}/cancel", s.requireWorkspaceAction("operate", s.cancelOperation))
+	r.With(s.requireMutation).Post("/{id}/retry", s.requireWorkspaceAction("operate", s.retryOperation))
 	r.Get("/{id}/events", s.operationEvents)
 }
 
@@ -225,6 +227,44 @@ func (s *server) cancelOperation(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, 200, map[string]any{"id": id, "status": "cancelled"})
 }
 
+func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	a := authFrom(r.Context())
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	var pending int
+	err = tx.QueryRow(r.Context(), `SELECT count(*) FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='pending'`, id, a.WorkspaceID).Scan(&pending)
+	if err == nil && pending == 0 {
+		_, err = tx.Exec(r.Context(), `UPDATE operation_steps SET status='pending',exit_code=NULL,stdout='',stderr='',started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=(SELECT s.id FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='failed' ORDER BY s.position DESC LIMIT 1)`, id, a.WorkspaceID)
+	}
+	var tag pgconn.CommandTag
+	if err == nil {
+		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status='pending_approval',error='',approved_by=NULL,approved_at=NULL,rejected_by=NULL,rejected_at=NULL,started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='failed'`, id, a.WorkspaceID)
+	}
+	if err == nil && tag.RowsAffected() != 1 {
+		s.writeError(w, r, 409, "operation is not retryable")
+		return
+	}
+	if err == nil {
+		err = insertOperationEvent(r.Context(), tx, id, "retry.requested", uuid.Nil, map[string]any{"requested_by": a.UserID})
+	}
+	if err == nil {
+		err = tx.Commit(r.Context())
+	}
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, 200, map[string]any{"id": id, "status": "pending_approval"})
+}
+
 func (s *server) failStaleOperations(ctx context.Context) error {
 	_, err := s.db.Exec(ctx, `WITH stale AS (UPDATE operations SET status='failed',error='server restarted before operation completed',finished_at=now(),updated_at=now() WHERE status IN ('planning','approved','running','summarizing') RETURNING id) INSERT INTO operation_events(operation_id,event_type,payload) SELECT id,'failed','{"error":"server restarted"}'::jsonb FROM stale`)
 	return err
@@ -287,7 +327,11 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 					s.markOperationStepsCancelled(context.Background(), id)
 					return
 				}
-				s.finishOperation(context.Background(), id, "failed", "diagnostic step failed")
+				var exitErr *ssh.ExitError
+				if errors.As(err, &exitErr) {
+					continue
+				}
+				s.finishOperation(context.Background(), id, "failed", "SSH execution failed")
 				return
 			}
 		}
@@ -326,6 +370,17 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 			s.setAgentSummaryNote(id, "Agent could not append further safe checks; summary uses evidence collected so far.")
 			break
 		}
+		var policy string
+		if err = s.db.QueryRow(ctx, `SELECT policy FROM operations WHERE id=$1`, id).Scan(&policy); err != nil {
+			s.finishOperation(context.Background(), id, "failed", "operation policy unavailable")
+			return
+		}
+		if policy == "unrestricted_approval" {
+			if s.pauseForAgentApproval(ctx, id) != nil {
+				s.finishOperation(context.Background(), id, "failed", "unable to request command approval")
+			}
+			return
+		}
 	}
 	if err := s.beginSummarizing(ctx, id); err != nil {
 		log.Printf("operation %s could not start summary: %v", id, err)
@@ -333,6 +388,22 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 		return
 	}
 	s.summarizeOperation(ctx, id, workspaceID)
+}
+
+func (s *server) pauseForAgentApproval(ctx context.Context, id uuid.UUID) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `UPDATE operations SET status='pending_approval',approved_by=NULL,approved_at=NULL,updated_at=now() WHERE id=$1 AND status='running'`)
+	if err != nil || tag.RowsAffected() != 1 {
+		return errors.New("operation is no longer running")
+	}
+	if err = insertOperationEvent(ctx, tx, id, "approval.required", uuid.Nil, map[string]any{"reason": "agent command batch"}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 type agentOperationInput struct {
@@ -373,6 +444,7 @@ func (s *server) decideAgentContinuation(ctx context.Context, id, workspaceID uu
 	var model plannerModel
 	var ciphertext []byte
 	var language string
+	var policy string
 	err := s.db.QueryRow(ctx, `SELECT m.base_url,m.external_model_id,m.api_key_ciphertext,o.response_language,o.title,o.summary,
 		COALESCE((SELECT content FROM chat_messages WHERE operation_id=o.id AND role='user' ORDER BY sequence LIMIT 1),''),
 		jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'status',s.status,'last_checked_at',s.last_checked_at)
@@ -389,7 +461,7 @@ func (s *server) decideAgentContinuation(ctx context.Context, id, workspaceID uu
 	prior := make([]planStep, 0, len(steps))
 	for _, step := range steps {
 		prior = append(prior, planStep{Description: step.Description, Executable: step.Executable, Args: step.Args})
-		if step.Status == "succeeded" {
+		if step.Status == "succeeded" || step.Status == "failed" {
 			exitCode := 0
 			if step.ExitCode != nil {
 				exitCode = *step.ExitCode
@@ -409,7 +481,10 @@ func (s *server) decideAgentContinuation(ctx context.Context, id, workspaceID uu
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.modelRequestTimeout)
 	defer cancel()
-	return requestOpenAIAgentDecision(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, language, input, prior)
+	if err = s.db.QueryRow(ctx, `SELECT policy FROM operations WHERE id=$1`, id).Scan(&policy); err != nil {
+		return agentDecision{}, plannerUsage{}, err
+	}
+	return requestOpenAIAgentDecision(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, language, input, prior, policy)
 }
 
 func (s *server) requireWorkspaceTokenQuota(ctx context.Context, workspaceID uuid.UUID) error {
@@ -466,7 +541,11 @@ func (s *server) recordAgentRound(id, workspaceID uuid.UUID, round int, usage pl
 		return errors.New("duplicate agent command")
 	}
 	for _, step := range steps {
-		if strings.TrimSpace(step.Description) == "" || validateReadOnlyCommand(step.Executable, step.Args) != nil {
+		var policy string
+		if err = tx.QueryRow(ctx, `SELECT policy FROM operations WHERE id=$1`, id).Scan(&policy); err != nil {
+			return err
+		}
+		if strings.TrimSpace(step.Description) == "" || validateCommandForPolicy(policy, step.Executable, step.Args) != nil {
 			return errors.New("unsafe agent command")
 		}
 	}
@@ -598,7 +677,7 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 		model.APIKey, err = decryptModelAPIKey(s.cfg.modelKeyEncryptionKey, ciphertext)
 	}
 	if err == nil {
-		rows, queryErr := s.db.Query(ctx, `SELECT description,COALESCE(exit_code,0),stdout,stderr FROM operation_steps WHERE operation_id=$1 AND status='succeeded' ORDER BY position`, id)
+		rows, queryErr := s.db.Query(ctx, `SELECT description,COALESCE(exit_code,0),stdout,stderr FROM operation_steps WHERE operation_id=$1 AND status IN ('succeeded','failed') ORDER BY position`, id)
 		if queryErr != nil {
 			err = queryErr
 		} else {
@@ -718,7 +797,11 @@ func (s *server) persistOperationSummary(id, workspaceID, threadID, modelID uuid
 }
 
 func (s *server) runOperationStep(parent context.Context, client *ssh.Client, opID uuid.UUID, step operationStepResponse, total int) error {
-	command, err := shellQuoteCommand(step.Executable, step.Args)
+	var policy string
+	if err := s.db.QueryRow(parent, `SELECT policy FROM operations WHERE id=$1`, opID).Scan(&policy); err != nil {
+		return err
+	}
+	command, err := serializeOperationCommand(policy, step.Executable, step.Args)
 	if err != nil {
 		return err
 	}
@@ -731,6 +814,7 @@ func (s *server) runOperationStep(parent context.Context, client *ssh.Client, op
 	defer cancel()
 	session, err := client.NewSession()
 	if err != nil {
+		s.failRunningStep(step.ID, "SSH session unavailable")
 		return err
 	}
 	defer session.Close()
@@ -754,10 +838,25 @@ func (s *server) runOperationStep(parent context.Context, client *ssh.Client, op
 	status := operationStepFinalStatus(parent.Err(), err)
 	_, dbErr := s.db.Exec(context.Background(), `UPDATE operation_steps SET status=$2,exit_code=$3,stdout=$4,stderr=$5,finished_at=now(),updated_at=now() WHERE id=$1 AND status='running'`, step.ID, status, exitCode, stdout.String(), stderr.String())
 	if dbErr != nil {
+		s.failRunningStep(step.ID, "step result could not be stored")
 		return dbErr
 	}
 	_ = insertOperationEvent(context.Background(), s.db, opID, "step.completed", step.ID, map[string]any{"position": step.Position, "total": total, "status": status, "exit_code": exitCode, "output_truncated": stdout.Truncated() || stderr.Truncated()})
 	return err
+}
+
+func (s *server) failRunningStep(id uuid.UUID, message string) {
+	_, _ = s.db.Exec(context.Background(), `UPDATE operation_steps SET status='failed',exit_code=-1,stderr=$2,finished_at=now(),updated_at=now() WHERE id=$1 AND status='running'`, id, message)
+}
+
+func serializeOperationCommand(policy, executable string, args []string) (string, error) {
+	if policy == "unrestricted_approval" {
+		if executable != "sh" || len(args) != 2 || args[0] != "-lc" || strings.TrimSpace(args[1]) == "" || len(args[1]) > 4000 || strings.ContainsRune(args[1], 0) {
+			return "", errors.New("invalid unrestricted command")
+		}
+		return "'sh' '-lc' " + shellQuote(args[1]), nil
+	}
+	return shellQuoteCommand(executable, args)
 }
 
 func waitSSHCommand(ctx context.Context, session *ssh.Session, done <-chan error) error {

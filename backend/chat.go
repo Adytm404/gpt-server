@@ -498,14 +498,26 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.operationCancels[opID] = cancel
 	s.cancelMu.Unlock()
-	plan, usage, planErr := requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, route.LanguageCode, in.Content, serverContext)
+	var plan operationPlan
+	var usage plannerUsage
+	var planErr error
+	var totalPlanUsage plannerUsage
+	for attempt := 0; attempt < 3; attempt++ {
+		plan, usage, planErr = requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, route.LanguageCode, in.Content, serverContext, in.Policy)
+		totalPlanUsage.InputTokens += usage.InputTokens
+		totalPlanUsage.OutputTokens += usage.OutputTokens
+		if planErr == nil || ctx.Err() != nil {
+			break
+		}
+	}
+	usage = totalPlanUsage
 	cancel()
 	s.cancelMu.Lock()
 	delete(s.operationCancels, opID)
 	s.cancelMu.Unlock()
 	if planErr != nil {
 		cleanupConn()
-		s.failPlanning(opID, planErr.Error())
+		s.failPlanning(opID, planErr.Error(), usage)
 		s.writeError(w, r, 502, "model could not produce a safe operation plan")
 		return
 	}
@@ -565,7 +577,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validChatPolicy(policy string) bool {
-	return policy == "approval_required" || policy == "explain_only"
+	return policy == "approval_required" || policy == "explain_only" || policy == "unrestricted_approval"
 }
 
 func effectiveIntent(policy, routeIntent string) string {
@@ -652,12 +664,29 @@ func (s *server) persistRoutedResponse(w http.ResponseWriter, r *http.Request, c
 	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Kind: "chat", ReplyToMessageID: &userID, Sequence: assistantSequence, Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
 }
 
-func (s *server) failPlanning(id uuid.UUID, message string) {
+func (s *server) failPlanning(id uuid.UUID, message string, usages ...plannerUsage) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	tag, _ := s.db.Exec(ctx, `UPDATE operations SET status='failed',error=$2,finished_at=now(),updated_at=now() WHERE id=$1 AND status='planning'`, id, message)
-	if tag.RowsAffected() > 0 {
-		_ = insertOperationEvent(ctx, s.db, id, "failed", uuid.Nil, map[string]any{"error": "planning failed"})
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback(ctx)
+	var workspaceID, threadID, modelID uuid.UUID
+	if err = tx.QueryRow(ctx, `SELECT workspace_id,thread_id,model_id FROM operations WHERE id=$1 AND status='planning' FOR UPDATE`, id).Scan(&workspaceID, &threadID, &modelID); err != nil {
+		return
+	}
+	if len(usages) > 0 && validUsage(usages[0]) {
+		_, err = tx.Exec(ctx, `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,'planning',$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date) ON CONFLICT DO NOTHING`, uuid.New(), workspaceID, threadID, id, modelID, usages[0].InputTokens, usages[0].OutputTokens)
+	}
+	if err == nil {
+		_, err = tx.Exec(ctx, `UPDATE operations SET status='failed',error=$2,finished_at=now(),updated_at=now() WHERE id=$1 AND status='planning'`, id, message)
+	}
+	if err == nil {
+		err = insertOperationEvent(ctx, tx, id, "failed", uuid.Nil, map[string]any{"error": "planning failed"})
+	}
+	if err == nil {
+		_ = tx.Commit(ctx)
 	}
 }
 
