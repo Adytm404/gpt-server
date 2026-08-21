@@ -51,6 +51,8 @@ func (s *server) adminRoutes(r chi.Router) {
 	r.With(s.requireMutation).Post("/models/{id}/fallback", s.fallbackModel)
 	r.With(s.requireMutation).Post("/models/{id}/enable", s.setModelEnabled(true))
 	r.With(s.requireMutation).Post("/models/{id}/disable", s.setModelEnabled(false))
+	r.Get("/auth-settings/google", s.getAdminGoogleOAuth)
+	r.With(s.requireMutation).Post("/auth-settings/google", s.setAdminGoogleOAuth)
 	r.Get("/plans", s.listPlans)
 	r.With(s.requireMutation).Post("/plans", s.createPlan)
 	r.Get("/plans/{id}", s.getPlan)

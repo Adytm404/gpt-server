@@ -10,6 +10,7 @@ type SessionState = {
   session: Session | null
   loading: boolean
   error: Error | null
+  refresh: () => Promise<Session | null>
 }
 
 const SessionContext = createContext<SessionState | null>(null)
@@ -37,7 +38,20 @@ export function clearSessionCache() {
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<SessionState>({ session: null, loading: true, error: null })
+  const [state, setState] = useState<Omit<SessionState, 'refresh'>>({ session: null, loading: true, error: null })
+  const refresh = async () => {
+    clearSessionCache()
+    setState(s => ({ ...s, loading: true }))
+    try {
+      const session = await requestSession()
+      setState({ session, loading: false, error: null })
+      return session
+    } catch (error) {
+      setState({ session: null, loading: false, error: error as Error })
+      return null
+    }
+  }
+
   useEffect(() => {
     let active = true
     requestSession().then(session => {
@@ -47,7 +61,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     })
     return () => { active = false }
   }, [])
-  return <SessionContext.Provider value={state}>{children}</SessionContext.Provider>
+  return <SessionContext.Provider value={{ ...state, refresh }}>{children}</SessionContext.Provider>
 }
 
 export function useSession() {

@@ -89,6 +89,7 @@ export default function AdminConsole() {
         <Route path="plans/new" element={<PlanEditor />} />
         <Route path="plans/:planID" element={<PlanEditor />} />
         <Route path="plans/:planID/preview" element={<PlanPreview />} />
+        <Route path="auth" element={<AuthSettingsPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="*" element={<Navigate to="models" replace />} />
       </Routes>
@@ -1480,6 +1481,135 @@ function HistoryPage() {
             ))}
           </div>
         )}
+      </section>
+    </main>
+  );
+}
+
+function AuthSettingsPage() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [redirectUri, setRedirectUri] = useState("");
+  const [hasClientSecret, setHasClientSecret] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await adminApi.getGoogleOAuthSettings();
+      setEnabled(res.enabled);
+      setClientId(res.client_id || "");
+      setRedirectUri(res.redirect_uri || `${window.location.origin}/auth/google/callback`);
+      setHasClientSecret(res.has_client_secret);
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      const res = await adminApi.setGoogleOAuthSettings({
+        enabled,
+        client_id: clientId.trim(),
+        client_secret: clientSecret.trim() || undefined,
+        redirect_uri: redirectUri.trim(),
+      });
+      setEnabled(res.enabled);
+      setClientId(res.client_id || "");
+      setHasClientSecret(res.has_client_secret);
+      setClientSecret("");
+      notify("Google OAuth settings updated");
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const copyUri = () => {
+    if (redirectUri) {
+      navigator.clipboard?.writeText(redirectUri);
+      notify("Redirect URI copied to clipboard");
+    }
+  };
+
+  return (
+    <main className="admin-page">
+      <PageHead
+        eyebrow="Platform control"
+        title="Authentication Settings"
+        copy="Manage external SSO providers such as Google OAuth 2.0."
+        action={
+          <button className="button dark" disabled={saving || loading} onClick={() => void save()}>
+            <Save size={14} /> {saving ? "Saving..." : "Save settings"}
+          </button>
+        }
+      />
+      {error && (
+        <div className="inline-api-error" role="alert">
+          {error}
+        </div>
+      )}
+      <section className="editor-main" style={{ maxWidth: 860, marginTop: 18 }}>
+        <EditorSection
+          number="01"
+          title="Google OAuth 2.0"
+          copy="Enable Google Sign-In and registration for all workspace users."
+        >
+          <div className="admin-form grid">
+            <label className="wide" style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+                style={{ width: "auto", margin: 0 }}
+              />
+              <span><b>Enable Google authentication</b><small style={{ display: "block", color: "var(--muted)" }}>Allow users to sign in and register with Google accounts.</small></span>
+            </label>
+            <label className="wide">
+              <span>Google Client ID</span>
+              <input
+                placeholder="e.g. 1234567890-abcdefg.apps.googleusercontent.com"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+              />
+            </label>
+            <label className="wide">
+              <span>Google Client Secret {hasClientSecret && <small style={{ color: "var(--green)" }}>(Configured)</small>}</span>
+              <input
+                type="password"
+                placeholder={hasClientSecret ? "Leave blank to keep existing secret" : "Enter Google Client Secret"}
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+              />
+            </label>
+            <label className="wide">
+              <span>Authorized Redirect URI</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={redirectUri}
+                  onChange={(e) => setRedirectUri(e.target.value)}
+                />
+                <button type="button" className="button secondary compact" onClick={copyUri}>
+                  <Copy size={13} /> Copy
+                </button>
+              </div>
+              <small style={{ marginTop: 4, color: "var(--muted)" }}>Add this exact URL to "Authorized redirect URIs" in your Google Cloud Console.</small>
+            </label>
+          </div>
+        </EditorSection>
       </section>
     </main>
   );

@@ -232,6 +232,9 @@ func (s *server) routes() http.Handler {
 		r.Post("/auth/register", s.requireOrigin(s.register))
 		r.Post("/auth/login", s.requireOrigin(s.login))
 		r.Post("/auth/logout", s.requireOrigin(s.logout))
+		r.Get("/auth/providers", s.getPublicAuthProviders)
+		r.Get("/auth/google/url", s.getGoogleAuthURL)
+		r.Post("/auth/google/callback", s.handleGoogleCallback)
 		r.Get("/me", s.me)
 		r.Get("/public/plans", s.listPublicPlans)
 		r.Group(func(r chi.Router) {

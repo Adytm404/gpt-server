@@ -157,6 +157,27 @@ export const adminApi = {
   async archivePlan(id: string) { return apiRequest<void>(`/api/v1/admin/plans/${encodeURIComponent(id)}/archive`, { method: 'POST' }) },
   async publishPlan(id: string) { await apiRequest(`/api/v1/admin/plans/${encodeURIComponent(id)}/publish`, { method: 'POST' }); return adminApi.getPlan(id) },
   async history(): Promise<HistoryEvent[]> { const events = unwrapList<HistoryEventDTO>(await apiRequest('/api/v1/admin/history'), 'events'); return events.map(event => ({ id: event.id, action: event.action, target_name: event.target_name, actorName: event.actor, resourceType: event.type.replace(/s$/, '') as HistoryEvent['resourceType'], created_at: event.created_at })) },
+  async getGoogleOAuthSettings() {
+    return apiRequest<{ provider: string; client_id: string; redirect_uri: string; enabled: boolean; has_client_secret: boolean; updated_at?: string }>('/api/v1/admin/auth-settings/google')
+  },
+  async setGoogleOAuthSettings(input: { client_id: string; client_secret?: string; redirect_uri?: string; enabled: boolean }) {
+    return apiRequest<{ provider: string; client_id: string; redirect_uri: string; enabled: boolean; has_client_secret: boolean; updated_at?: string }>('/api/v1/admin/auth-settings/google', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+  async getAuthProviders() {
+    return apiRequest<{ google: { enabled: boolean; client_id?: string } }>('/api/v1/auth/providers')
+  },
+  async getGoogleAuthURL() {
+    return apiRequest<{ url: string; state: string }>('/api/v1/auth/google/url')
+  },
+  async handleGoogleCallback(code: string, state: string) {
+    return apiRequest<{ user: { id: string; full_name: string; email: string; platform_role: string }; workspace: { id: string; name: string; role: string } }>('/api/v1/auth/google/callback', {
+      method: 'POST',
+      body: JSON.stringify({ code, state }),
+    })
+  },
 }
 
 export async function listPublicPlans() {
