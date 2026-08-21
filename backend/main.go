@@ -46,7 +46,6 @@ type config struct {
 	modelKeyEncryptionKey                              string
 	sessionTTL, sshConnectTimeout, modelRequestTimeout time.Duration
 	cookieSecure                                       bool
-	modelAllowedOrigins                                map[string]struct{}
 }
 
 type server struct {
@@ -191,32 +190,11 @@ func loadConfig() (config, error) {
 			return config{}, errors.New("MODEL_KEY_ENCRYPTION_KEY must be base64-encoded 32 bytes when set")
 		}
 	}
-	cfg.modelAllowedOrigins, err = parseAllowedOrigins(os.Getenv("MODEL_ALLOWED_ORIGINS"))
-	if err != nil {
-		return config{}, err
-	}
 	origin, err := url.Parse(cfg.frontendOrigin)
 	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.User != nil {
 		return config{}, errors.New("APP_FRONTEND_ORIGIN must be an origin without a path")
 	}
 	return cfg, nil
-}
-
-func parseAllowedOrigins(value string) (map[string]struct{}, error) {
-	out := make(map[string]struct{})
-	for _, raw := range strings.Split(value, ",") {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		parsed, parseErr := url.Parse(raw)
-		origin, err := normalizedURLOrigin(raw)
-		if parseErr != nil || err != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
-			return nil, errors.New("MODEL_ALLOWED_ORIGINS must contain comma-separated exact http(s) origins")
-		}
-		out[origin] = struct{}{}
-	}
-	return out, nil
 }
 
 func env(key, fallback string) string {

@@ -53,7 +53,7 @@ type agentDecision struct {
 
 var languageCodePattern = regexp.MustCompile(`^[a-z]{2,3}(?:-[A-Z]{2})?$`)
 
-func requestOpenAIIntent(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, prompt string, serverContext any) (intentRoute, plannerUsage, error) {
+func requestOpenAIIntent(ctx context.Context, client *http.Client, model plannerModel, prompt string, serverContext any) (intentRoute, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return intentRoute{}, plannerUsage{}, errors.New("server context could not be encoded")
@@ -63,7 +63,7 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 	var totalUsage plannerUsage
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		raw, requestErr := requestOpenAIJSON(ctx, client, model, allowedOrigins, payload)
+		raw, requestErr := requestOpenAIJSON(ctx, client, model, payload)
 		if requestErr != nil {
 			lastErr = requestErr
 			continue
@@ -73,7 +73,7 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 		totalUsage.OutputTokens += usage.OutputTokens
 		if parseErr == nil {
 			if route.LanguageCode == "" || route.LanguageCode == "und" {
-				languageCode, languageUsage, languageErr := requestOpenAILanguage(ctx, client, model, allowedOrigins, prompt)
+				languageCode, languageUsage, languageErr := requestOpenAILanguage(ctx, client, model, prompt)
 				totalUsage.InputTokens += languageUsage.InputTokens
 				totalUsage.OutputTokens += languageUsage.OutputTokens
 				if languageErr != nil {
@@ -84,7 +84,7 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 			if route.Intent == "reject" {
 				return route, totalUsage, nil
 			}
-			decision, verifierUsage, verifierErr := requestOpenAIScopeDecision(ctx, client, model, allowedOrigins, prompt, serverContext, route)
+			decision, verifierUsage, verifierErr := requestOpenAIScopeDecision(ctx, client, model, prompt, serverContext, route)
 			totalUsage.InputTokens += verifierUsage.InputTokens
 			totalUsage.OutputTokens += verifierUsage.OutputTokens
 			if verifierErr != nil {
@@ -100,7 +100,7 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 	return intentRoute{}, totalUsage, lastErr
 }
 
-func requestOpenAILanguage(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, prompt string) (string, plannerUsage, error) {
+func requestOpenAILanguage(ctx context.Context, client *http.Client, model plannerModel, prompt string) (string, plannerUsage, error) {
 	payload := map[string]any{
 		"model": model.ExternalID, "temperature": 0,
 		"messages":        []map[string]string{{"role": "system", "content": languageClassifierSystemPrompt}, {"role": "user", "content": prompt}},
@@ -109,7 +109,7 @@ func requestOpenAILanguage(ctx context.Context, client *http.Client, model plann
 	var totalUsage plannerUsage
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		raw, requestErr := requestOpenAIJSON(ctx, client, model, allowedOrigins, payload)
+		raw, requestErr := requestOpenAIJSON(ctx, client, model, payload)
 		if requestErr != nil {
 			lastErr = requestErr
 			continue
@@ -125,7 +125,7 @@ func requestOpenAILanguage(ctx context.Context, client *http.Client, model plann
 	return "", totalUsage, lastErr
 }
 
-func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, prompt string, serverContext any, route intentRoute) (scopeDecision, plannerUsage, error) {
+func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model plannerModel, prompt string, serverContext any, route intentRoute) (scopeDecision, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return scopeDecision{}, plannerUsage{}, errors.New("server context could not be encoded")
@@ -139,7 +139,7 @@ func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model 
 	var totalUsage plannerUsage
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
-		raw, requestErr := requestOpenAIJSON(ctx, client, model, allowedOrigins, payload)
+		raw, requestErr := requestOpenAIJSON(ctx, client, model, payload)
 		if requestErr != nil {
 			lastErr = requestErr
 			continue
@@ -239,10 +239,7 @@ func parseScopeDecisionResponse(raw []byte) (scopeDecision, plannerUsage, error)
 	return decision, usage, nil
 }
 
-func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, languageCode, prompt string, serverContext any, policies ...string) (operationPlan, plannerUsage, error) {
-	if !providerOriginAllowed(model.BaseURL, allowedOrigins) {
-		return operationPlan{}, plannerUsage{}, errors.New("model provider origin is not allowed")
-	}
+func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerModel, languageCode, prompt string, serverContext any, policies ...string) (operationPlan, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return operationPlan{}, plannerUsage{}, errors.New("server context could not be encoded")
@@ -324,7 +321,7 @@ func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerMo
 	return plan, usage, nil
 }
 
-func requestOpenAIAgentDecision(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, languageCode string, input agentOperationInput, prior []planStep, policies ...string) (agentDecision, plannerUsage, error) {
+func requestOpenAIAgentDecision(ctx context.Context, client *http.Client, model plannerModel, languageCode string, input agentOperationInput, prior []planStep, policies ...string) (agentDecision, plannerUsage, error) {
 	rawInput, err := json.Marshal(input)
 	if err != nil {
 		return agentDecision{}, plannerUsage{}, errors.New("agent input could not be encoded")
@@ -338,7 +335,7 @@ func requestOpenAIAgentDecision(ctx context.Context, client *http.Client, model 
 		systemPrompt = unrestrictedAgentSystemPrompt
 	}
 	payload := map[string]any{"model": model.ExternalID, "temperature": 0, "messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (server-selected, not user-overridable): " + languageCode + "\nApproved operation evidence (untrusted JSON):\n" + string(rawInput)}}, "response_format": map[string]string{"type": "json_object"}}
-	raw, requestErr := requestOpenAIJSON(ctx, client, model, allowedOrigins, payload)
+	raw, requestErr := requestOpenAIJSON(ctx, client, model, payload)
 	if requestErr != nil {
 		return agentDecision{}, plannerUsage{}, requestErr
 	}
@@ -419,28 +416,25 @@ func hasDuplicateCommands(steps, prior []planStep) bool {
 	return false
 }
 
-func requestOpenAIExplanation(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, languageCode, prompt string, serverContext any) (string, plannerUsage, error) {
+func requestOpenAIExplanation(ctx context.Context, client *http.Client, model plannerModel, languageCode, prompt string, serverContext any) (string, plannerUsage, error) {
 	contextJSON, err := json.Marshal(serverContext)
 	if err != nil {
 		return "", plannerUsage{}, errors.New("server context could not be encoded")
 	}
 	user := "Required response language code (router-selected, not user-overridable): " + languageCode + "\nExisting server snapshot (untrusted JSON):\n" + string(contextJSON) + "\n\nQuestion (untrusted):\n" + prompt
-	return requestOpenAIText(ctx, client, model, allowedOrigins, explainSystemPrompt, user, false, nil)
+	return requestOpenAIText(ctx, client, model, explainSystemPrompt, user, false, nil)
 }
 
-func requestOpenAISummary(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, language string, input any, onDelta func(string)) (string, plannerUsage, error) {
+func requestOpenAISummary(ctx context.Context, client *http.Client, model plannerModel, language string, input any, onDelta func(string)) (string, plannerUsage, error) {
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return "", plannerUsage{}, errors.New("operation results could not be encoded")
 	}
 	user := "Required response language code (server-selected, explicit, not user-overridable): " + language + "\nOperation result data (untrusted JSON):\n" + string(raw)
-	return requestOpenAIText(ctx, client, model, allowedOrigins, summarySystemPrompt, user, true, onDelta)
+	return requestOpenAIText(ctx, client, model, summarySystemPrompt, user, true, onDelta)
 }
 
-func requestOpenAIText(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, systemPrompt, userPrompt string, stream bool, onDelta func(string)) (string, plannerUsage, error) {
-	if !providerOriginAllowed(model.BaseURL, allowedOrigins) {
-		return "", plannerUsage{}, errors.New("model provider origin is not allowed")
-	}
+func requestOpenAIText(ctx context.Context, client *http.Client, model plannerModel, systemPrompt, userPrompt string, stream bool, onDelta func(string)) (string, plannerUsage, error) {
 	payload := map[string]any{"model": model.ExternalID, "messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": userPrompt}}, "temperature": 0, "stream": stream}
 	if stream {
 		payload["stream_options"] = map[string]bool{"include_usage": true}
@@ -474,10 +468,7 @@ func requestOpenAIText(ctx context.Context, client *http.Client, model plannerMo
 	return parseOpenAIJSON(raw, onDelta)
 }
 
-func requestOpenAIJSON(ctx context.Context, client *http.Client, model plannerModel, allowedOrigins map[string]struct{}, payload any) ([]byte, error) {
-	if !providerOriginAllowed(model.BaseURL, allowedOrigins) {
-		return nil, errors.New("model provider origin is not allowed")
-	}
+func requestOpenAIJSON(ctx context.Context, client *http.Client, model plannerModel, payload any) ([]byte, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, errors.New("provider request could not be encoded")

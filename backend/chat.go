@@ -438,7 +438,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	routeCtx, routeCancel := context.WithTimeout(r.Context(), s.cfg.modelRequestTimeout)
-	route, routeUsage, routeErr := requestOpenAIIntent(routeCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, in.Content, serverContext)
+	route, routeUsage, routeErr := requestOpenAIIntent(routeCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, in.Content, serverContext)
 	routeCancel()
 	if routeErr != nil {
 		log.Printf("chat intent routing failed request_id=%s: %v", middleware.GetReqID(r.Context()), routeErr)
@@ -504,7 +504,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	var planErr error
 	var totalPlanUsage plannerUsage
 	for attempt := 0; attempt < 3; attempt++ {
-		plan, usage, planErr = requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, route.LanguageCode, in.Content, serverContext, effectivePolicy)
+		plan, usage, planErr = requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, route.LanguageCode, in.Content, serverContext, effectivePolicy)
 		totalPlanUsage.InputTokens += usage.InputTokens
 		totalPlanUsage.OutputTokens += usage.OutputTokens
 		if planErr == nil || ctx.Err() != nil {
@@ -616,7 +616,7 @@ func effectiveOperationPolicy(policy, routeIntent string) string {
 
 func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, conn *pgxpool.Conn, threadID uuid.UUID, a sessionAuth, model resolvedPlanner, content, languageCode string, serverContext map[string]any, routeUsage plannerUsage) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.modelRequestTimeout)
-	response, usage, err := requestOpenAIExplanation(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, languageCode, content, serverContext)
+	response, usage, err := requestOpenAIExplanation(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, languageCode, content, serverContext)
 	cancel()
 	if err != nil {
 		s.writeError(w, r, 502, "model could not explain the server snapshot")

@@ -347,12 +347,8 @@ func (s *server) testSavedModel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) runModelTest(w http.ResponseWriter, r *http.Request, in modelInput) {
-	if !providerOriginAllowed(in.BaseURL, s.cfg.modelAllowedOrigins) {
-		s.writeError(w, r, http.StatusUnprocessableEntity, "provider origin is not allowed")
-		return
-	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	result, err := testOpenAIConnection(r.Context(), client, in, s.cfg.modelAllowedOrigins)
+	result, err := testOpenAIConnection(r.Context(), client, in)
 	if err == nil {
 		s.writeJSON(w, http.StatusOK, result)
 		return
@@ -367,10 +363,7 @@ func (s *server) runModelTest(w http.ResponseWriter, r *http.Request, in modelIn
 	s.writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": message, "provider_status": providerStatus, "request_id": middleware.GetReqID(r.Context())})
 }
 
-func testOpenAIConnection(ctx context.Context, client *http.Client, in modelInput, allowedOrigins map[string]struct{}) (modelTestResponse, error) {
-	if !providerOriginAllowed(in.BaseURL, allowedOrigins) {
-		return modelTestResponse{}, &modelProviderError{Message: "provider origin is not allowed"}
-	}
+func testOpenAIConnection(ctx context.Context, client *http.Client, in modelInput) (modelTestResponse, error) {
 	endpoint := strings.TrimRight(strings.TrimSpace(in.BaseURL), "/") + "/chat/completions"
 	payload := map[string]any{"model": in.ModelID, "messages": []map[string]string{{"role": "user", "content": "Reply with OK"}}, "max_tokens": 1}
 	body, err := json.Marshal(payload)

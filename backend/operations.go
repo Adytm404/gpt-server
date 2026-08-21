@@ -492,7 +492,7 @@ func (s *server) decideAgentContinuation(ctx context.Context, id, workspaceID uu
 	if err = s.db.QueryRow(ctx, `SELECT policy FROM operations WHERE id=$1`, id).Scan(&policy); err != nil {
 		return agentDecision{}, plannerUsage{}, err
 	}
-	return requestOpenAIAgentDecision(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, language, input, prior, policy)
+	return requestOpenAIAgentDecision(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, language, input, prior, policy)
 }
 
 func (s *server) requireWorkspaceTokenQuota(ctx context.Context, workspaceID uuid.UUID) error {
@@ -730,7 +730,7 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 	}
 	if err == nil {
 		requestCtx, cancel := context.WithTimeout(ctx, s.cfg.modelRequestTimeout)
-		content, usage, err = requestOpenAISummary(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, languageCode, input, onDelta)
+		content, usage, err = requestOpenAISummary(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, languageCode, input, onDelta)
 		cancel()
 	}
 	if ctx.Err() != nil {

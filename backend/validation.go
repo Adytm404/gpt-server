@@ -181,15 +181,6 @@ func normalizedURLOrigin(value string) (string, error) {
 	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), nil
 }
 
-func providerOriginAllowed(baseURL string, allowed map[string]struct{}) bool {
-	origin, err := normalizedURLOrigin(baseURL)
-	if err != nil {
-		return false
-	}
-	_, ok := allowed[origin]
-	return ok
-}
-
 func validatePlanInput(in planRevisionInput) error {
 	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 200 || !slugPattern.MatchString(in.Slug) || len(in.Slug) > 100 || len(in.Description) > 5000 || in.PriceCents < 0 || in.AnnualPriceCents < 0 || in.MaxWorkspaces < 0 || in.MaxServers < 0 || in.MonthlyTokens < 0 || in.InputTokens < 0 || in.OutputTokens < 0 {
 		return errors.New("invalid plan fields")

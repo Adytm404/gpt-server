@@ -183,7 +183,7 @@ func TestOpenAIIntentLanguageFallback(t *testing.T) {
 		}))
 		defer provider.Close()
 
-		route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "periksa server", nil)
+		route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "periksa server", nil)
 		if err != nil || route.LanguageCode != "id" || calls != 3 || usage.InputTokens != 16 || usage.OutputTokens != 6 {
 			t.Fatalf("route=%+v usage=%+v calls=%d err=%v", route, usage, calls, err)
 		}
@@ -202,7 +202,7 @@ func TestOpenAIIntentLanguageFallback(t *testing.T) {
 		}))
 		defer provider.Close()
 
-		_, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "check", nil)
+		_, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "check", nil)
 		if err == nil || calls != 4 || usage.InputTokens != 8 || usage.OutputTokens != 4 {
 			t.Fatalf("usage=%+v calls=%d err=%v", usage, calls, err)
 		}
@@ -259,7 +259,7 @@ func TestOpenAIAgentDecisionKeyedKeylessStrictJSONAndUsage(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"status\":\"continue\",\"reason\":\"candidate found\",\"steps\":[{\"description\":\"measure\",\"executable\":\"du\",\"args\":[\"-sh\",\"--\",\"/srv/nirvaya\"]}]}"}}],"usage":{"prompt_tokens":11,"completion_tokens":5}}`))
 		}))
-		decision, usage, err := requestOpenAIAgentDecision(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, map[string]struct{}{provider.URL: {}}, "id", agentOperationInput{Request: "cek backup"}, nil)
+		decision, usage, err := requestOpenAIAgentDecision(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, "id", agentOperationInput{Request: "cek backup"}, nil)
 		provider.Close()
 		if err != nil || decision.Status != "continue" || usage.InputTokens != 11 || usage.OutputTokens != 5 {
 			t.Fatalf("key=%q decision=%+v usage=%+v err=%v", key, decision, usage, err)
@@ -268,18 +268,12 @@ func TestOpenAIAgentDecisionKeyedKeylessStrictJSONAndUsage(t *testing.T) {
 }
 
 func TestOpenAIAgentDecisionProviderSafety(t *testing.T) {
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "provider secret", 500) }))
-	defer provider.Close()
-	model := plannerModel{BaseURL: provider.URL, ExternalID: "test"}
-	if _, _, err := requestOpenAIAgentDecision(context.Background(), provider.Client(), model, nil, "en", agentOperationInput{}, nil); err == nil || !strings.Contains(err.Error(), "origin") {
-		t.Fatalf("origin error=%v", err)
-	}
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("redirect followed") }))
 	defer target.Close()
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
 	defer redirect.Close()
-	model.BaseURL = redirect.URL
-	if _, _, err := requestOpenAIAgentDecision(context.Background(), redirect.Client(), model, map[string]struct{}{redirect.URL: {}}, "en", agentOperationInput{}, nil); err == nil {
+	model := plannerModel{BaseURL: redirect.URL, ExternalID: "test"}
+	if _, _, err := requestOpenAIAgentDecision(context.Background(), redirect.Client(), model, "en", agentOperationInput{}, nil); err == nil {
 		t.Fatal("redirect accepted")
 	}
 }
@@ -371,8 +365,7 @@ func TestOpenAIPlannerKeyedKeylessUsageAndFence(t *testing.T) {
 				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"` + "```json\\n" + `{\"title\":\"Health\",\"summary\":\"Inspect server\",\"risk\":\"low\",\"steps\":[{\"description\":\"Show uptime\",\"executable\":\"uptime\",\"args\":[]}]}\\n` + "```" + `"}}],"usage":{"prompt_tokens":12,"completion_tokens":8}}`))
 			}))
 			defer provider.Close()
-			allowed := map[string]struct{}{provider.URL: {}}
-			plan, usage, err := requestOpenAIPlan(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, allowed, "en", "Check server uptime", map[string]any{"status": "online"})
+			plan, usage, err := requestOpenAIPlan(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, "en", "Check server uptime", map[string]any{"status": "online"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -415,7 +408,7 @@ func TestOpenAIIntentRouterClassesKeyModesSchemaAndRedaction(t *testing.T) {
 					_, _ = w.Write(out)
 				}))
 				defer provider.Close()
-				route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, map[string]struct{}{provider.URL: {}}, "arbitrary mixed bahasa", map[string]any{"status": "ok"})
+				route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, "arbitrary mixed bahasa", map[string]any{"status": "ok"})
 				wantCalls, wantInput, wantOutput := 2, int64(12), int64(5)
 				if intent == "reject" {
 					wantCalls, wantInput, wantOutput = 1, 7, 3
@@ -471,7 +464,7 @@ func TestOpenAIIntentScopeConsensus(t *testing.T) {
 				_, _ = w.Write(out)
 			}))
 			defer provider.Close()
-			route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, tc.prompt, map[string]any{"disk_percent": 33})
+			route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, tc.prompt, map[string]any{"disk_percent": 33})
 			if tc.verifierMalformed {
 				if err == nil || calls != 3 || usage.InputTokens != 9 || usage.OutputTokens != 6 {
 					t.Fatalf("route=%+v usage=%+v calls=%d err=%v", route, usage, calls, err)
@@ -503,7 +496,7 @@ func TestOpenAIIntentRouterRejectsInvalidProviderResponses(t *testing.T) {
 				_, _ = w.Write(out)
 			}))
 			defer provider.Close()
-			_, _, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "anything", nil)
+			_, _, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "anything", nil)
 			if err == nil {
 				t.Fatal("invalid route accepted")
 			}
@@ -513,7 +506,7 @@ func TestOpenAIIntentRouterRejectsInvalidProviderResponses(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"intent\":\"reject\",\"language_code\":\"en\",\"response\":\"\",\"reason\":\"x\"}"}}],"usage":{"prompt_tokens":0,"completion_tokens":0}}`))
 	}))
 	defer provider.Close()
-	if _, _, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "anything", nil); err == nil || !strings.Contains(err.Error(), "usage") {
+	if _, _, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "anything", nil); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Fatalf("invalid usage error=%v", err)
 	}
 }
@@ -521,18 +514,15 @@ func TestOpenAIIntentRouterRejectsInvalidProviderResponses(t *testing.T) {
 func TestOpenAIIntentRouterProviderSafety(t *testing.T) {
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "provider secret", 500) }))
 	defer provider.Close()
-	_, _, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "anything", nil)
+	_, _, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "anything", nil)
 	if err == nil || strings.Contains(err.Error(), "provider secret") {
 		t.Fatalf("provider error=%v", err)
-	}
-	if _, _, err = requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, nil, "anything", nil); err == nil || !strings.Contains(err.Error(), "origin") {
-		t.Fatalf("origin error=%v", err)
 	}
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("redirect followed") }))
 	defer target.Close()
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
 	defer redirect.Close()
-	if _, _, err = requestOpenAIIntent(context.Background(), redirect.Client(), plannerModel{BaseURL: redirect.URL, ExternalID: "test"}, map[string]struct{}{redirect.URL: {}}, "anything", nil); err == nil {
+	if _, _, err = requestOpenAIIntent(context.Background(), redirect.Client(), plannerModel{BaseURL: redirect.URL, ExternalID: "test"}, "anything", nil); err == nil {
 		t.Fatal("redirect accepted")
 	}
 }
@@ -553,7 +543,7 @@ func TestOpenAIIntentRouterRetriesTransientProviderFailure(t *testing.T) {
 		_, _ = w.Write(out)
 	}))
 	defer provider.Close()
-	route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, `cari folder "nirvaya" trs cek ukuran foldernya berapa`, nil)
+	route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, `cari folder "nirvaya" trs cek ukuran foldernya berapa`, nil)
 	if err != nil || route.Intent != "server_operation" || route.LanguageCode != "id" || calls != 3 || usage.InputTokens != 4 || usage.OutputTokens != 2 {
 		t.Fatalf("route=%+v usage=%+v calls=%d err=%v", route, usage, calls, err)
 	}
@@ -601,7 +591,7 @@ func TestUnrestrictedPlannerForcesHighRisk(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Install\",\"summary\":\"Install package\",\"risk\":\"low\",\"steps\":[{\"description\":\"Install speedtest\",\"executable\":\"sh\",\"args\":[\"-lc\",\"apt-get install -y speedtest-cli\"]}]}"}}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`))
 	}))
 	defer provider.Close()
-	plan, _, err := requestOpenAIPlan(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "id", "instalkan speedtest-cli", nil, "unrestricted_approval")
+	plan, _, err := requestOpenAIPlan(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "id", "instalkan speedtest-cli", nil, "unrestricted_approval")
 	if err != nil || plan.Risk != "high" {
 		t.Fatalf("plan=%+v err=%v", plan, err)
 	}
@@ -664,7 +654,7 @@ func TestOpenAIExplanationKeyedKeylessLanguageAndPolicy(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Ruang disk tersedia."}}],"usage":{"prompt_tokens":9,"completion_tokens":4}}`))
 		}))
-		text, usage, err := requestOpenAIExplanation(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, map[string]struct{}{provider.URL: {}}, "id", "Lihat ruang penyimpanan server", map[string]any{"disk_percent": 20})
+		text, usage, err := requestOpenAIExplanation(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test", APIKey: key}, "id", "Lihat ruang penyimpanan server", map[string]any{"disk_percent": 20})
 		provider.Close()
 		if err != nil || text != "Ruang disk tersedia." || usage.InputTokens != 9 || usage.OutputTokens != 4 {
 			t.Fatalf("key=%q text=%q usage=%+v err=%v", key, text, usage, err)
@@ -680,7 +670,7 @@ func TestOpenAISummaryStreamingJSONFallbackAndProviderError(t *testing.T) {
 		}))
 		defer provider.Close()
 		var deltas []string
-		text, usage, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "English", map[string]any{"status": "ok"}, func(s string) { deltas = append(deltas, s) })
+		text, usage, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "English", map[string]any{"status": "ok"}, func(s string) { deltas = append(deltas, s) })
 		if err != nil || text != "Disk healthy" || strings.Join(deltas, "") != text || usage.InputTokens != 10 || usage.OutputTokens != 2 {
 			t.Fatalf("text=%q deltas=%v usage=%+v err=%v", text, deltas, usage, err)
 		}
@@ -698,7 +688,7 @@ func TestOpenAISummaryStreamingJSONFallbackAndProviderError(t *testing.T) {
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Complete"}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`))
 		}))
 		defer provider.Close()
-		text, _, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "English", nil, nil)
+		text, _, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "English", nil, nil)
 		if err != nil || text != "Complete" {
 			t.Fatalf("text=%q err=%v", text, err)
 		}
@@ -709,7 +699,7 @@ func TestOpenAISummaryStreamingJSONFallbackAndProviderError(t *testing.T) {
 	t.Run("provider-error", func(t *testing.T) {
 		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "secret", 500) }))
 		defer provider.Close()
-		_, _, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "English", nil, nil)
+		_, _, err := requestOpenAISummary(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, "English", nil, nil)
 		if err == nil || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("provider error=%v", err)
 		}
@@ -751,7 +741,7 @@ func TestOpenAIPlannerFailuresAndNoRedirect(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(tc.handler)
 			defer srv.Close()
-			_, _, err := requestOpenAIPlan(context.Background(), srv.Client(), plannerModel{BaseURL: srv.URL, ExternalID: "test"}, map[string]struct{}{srv.URL: {}}, "en", "Check server", nil)
+			_, _, err := requestOpenAIPlan(context.Background(), srv.Client(), plannerModel{BaseURL: srv.URL, ExternalID: "test"}, "en", "Check server", nil)
 			if err == nil {
 				t.Fatal("failure accepted")
 			}
@@ -764,33 +754,20 @@ func TestOpenAIPlannerFailuresAndNoRedirect(t *testing.T) {
 	defer target.Close()
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
 	defer redirect.Close()
-	_, _, err := requestOpenAIPlan(context.Background(), redirect.Client(), plannerModel{BaseURL: redirect.URL, ExternalID: "test"}, map[string]struct{}{redirect.URL: {}}, "en", "Check server", nil)
+	_, _, err := requestOpenAIPlan(context.Background(), redirect.Client(), plannerModel{BaseURL: redirect.URL, ExternalID: "test"}, "en", "Check server", nil)
 	if err == nil {
 		t.Fatal("redirect accepted")
 	}
 }
 
-func TestOpenAIPlannerRejectsMissingUsageAndUnapprovedOrigin(t *testing.T) {
+func TestOpenAIPlannerRejectsMissingUsage(t *testing.T) {
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"title\":\"Health\",\"summary\":\"Inspect server\",\"risk\":\"low\",\"steps\":[{\"description\":\"Show uptime\",\"executable\":\"uptime\",\"args\":[]}] }"}}]}`))
 	}))
 	defer provider.Close()
 	model := plannerModel{BaseURL: provider.URL, ExternalID: "test"}
-	if _, _, err := requestOpenAIPlan(context.Background(), provider.Client(), model, map[string]struct{}{provider.URL: {}}, "en", "Check server", nil); err == nil || !strings.Contains(err.Error(), "usage") {
+	if _, _, err := requestOpenAIPlan(context.Background(), provider.Client(), model, "en", "Check server", nil); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Fatalf("missing usage error = %v", err)
-	}
-	if _, _, err := requestOpenAIPlan(context.Background(), provider.Client(), model, nil, "en", "Check server", nil); err == nil || !strings.Contains(err.Error(), "origin") {
-		t.Fatalf("unapproved origin error = %v", err)
-	}
-}
-
-func TestProviderAllowedOrigins(t *testing.T) {
-	allowed, err := parseAllowedOrigins("https://api.example.com,http://localhost:20128")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !providerOriginAllowed("https://api.example.com/v1", allowed) || !providerOriginAllowed("http://localhost:20128/openai", allowed) || providerOriginAllowed("https://evil.example/v1", allowed) {
-		t.Fatal("origin allowlist did not use exact normalized origins")
 	}
 }
 
