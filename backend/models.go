@@ -365,7 +365,7 @@ func (s *server) runModelTest(w http.ResponseWriter, r *http.Request, in modelIn
 
 func testOpenAIConnection(ctx context.Context, client *http.Client, in modelInput) (modelTestResponse, error) {
 	endpoint := strings.TrimRight(strings.TrimSpace(in.BaseURL), "/") + "/chat/completions"
-	payload := map[string]any{"model": in.ModelID, "messages": []map[string]string{{"role": "user", "content": "Reply with OK"}}, "max_tokens": 1}
+	payload := map[string]any{"model": in.ModelID, "messages": []map[string]string{{"role": "user", "content": "Reply with OK"}}, "max_tokens": 1, "stream": false}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return modelTestResponse{}, err
