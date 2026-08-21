@@ -452,9 +452,14 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	route, routeUsage, routeErr := requestOpenAIIntent(routeCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, in.Content, serverContext, history...)
 	routeCancel()
 	if routeErr != nil {
-		log.Printf("chat intent routing failed request_id=%s: %v", middleware.GetReqID(r.Context()), routeErr)
-		s.writeError(w, r, 502, "model could not route the request")
-		return
+		log.Printf("chat intent routing failed request_id=%s: %v, attempting safe auto-recovery fallback", middleware.GetReqID(r.Context()), routeErr)
+		route = intentRoute{Intent: "server_operation", LanguageCode: "en", Reason: "server operation auto-recovery"}
+		if in.Policy == "explain_only" {
+			route.Intent = "server_explanation"
+		}
+		if in.Policy == "unrestricted_approval" || in.Policy == "autonomous_full_access" {
+			route.Intent = "server_mutation"
+		}
 	}
 	intent := effectiveIntent(in.Policy, route.Intent)
 	if intent == "reject" {

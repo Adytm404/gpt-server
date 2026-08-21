@@ -251,9 +251,10 @@ func parseScopeDecisionResponse(raw []byte) (scopeDecision, plannerUsage, error)
 	if !validUsage(usage) {
 		return scopeDecision{}, plannerUsage{}, errors.New("model provider returned invalid usage")
 	}
-	decoder := json.NewDecoder(strings.NewReader(stripJSONFence(response.Choices[0].Message.Content)))
-	decoder.DisallowUnknownFields()
+	cleaned := stripJSONFence(response.Choices[0].Message.Content)
 	var decision scopeDecision
+	decoder := json.NewDecoder(strings.NewReader(cleaned))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&decision); err != nil {
 		return scopeDecision{}, usage, errors.New("model provider returned invalid scope decision JSON")
 	}
