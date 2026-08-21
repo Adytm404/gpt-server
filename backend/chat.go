@@ -437,15 +437,16 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, 502, "model could not route the request")
 		return
 	}
-	if route.Intent == "reject" {
+	intent := effectiveIntent(in.Policy, route.Intent)
+	if intent == "reject" {
 		s.writeError(w, r, 422, "request is outside permitted server management scope")
 		return
 	}
-	if route.Intent == "conversation" || route.Intent == "server_explanation" {
+	if intent == "conversation" || (intent == "server_explanation" && route.Intent == "server_explanation") {
 		s.persistRoutedResponse(w, r, conn, threadID, a.WorkspaceID, model, in.Content, route.Response, routeUsage)
 		return
 	}
-	if in.Policy == "explain_only" {
+	if intent == "server_explanation" {
 		s.createExplanation(w, r, conn, threadID, a, model, in.Content, route.LanguageCode, serverContext, routeUsage)
 		return
 	}
@@ -555,6 +556,16 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 
 func validChatPolicy(policy string) bool {
 	return policy == "approval_required" || policy == "explain_only"
+}
+
+func effectiveIntent(policy, routeIntent string) string {
+	if policy == "approval_required" && routeIntent == "server_explanation" {
+		return "server_operation"
+	}
+	if policy == "explain_only" && routeIntent == "server_operation" {
+		return "server_explanation"
+	}
+	return routeIntent
 }
 
 func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, conn *pgxpool.Conn, threadID uuid.UUID, a sessionAuth, model resolvedPlanner, content, languageCode string, serverContext map[string]any, routeUsage plannerUsage) {

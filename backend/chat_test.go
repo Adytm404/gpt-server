@@ -75,12 +75,66 @@ func TestRuntimeHasNoKeywordIntentOrLanguageRouting(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, forbidden := range []string{"serverIntentPattern", "actionIntentPattern", "deniedPromptPattern", "hostLikePattern", "localChatResponse", "preferredResponseLanguage"} {
+		for _, forbidden := range []string{"serverIntentPattern", "actionIntentPattern", "deniedPromptPattern", "hostLikePattern", "localChatResponse", "preferredResponseLanguage", "detectLanguage", "languageKeywords"} {
 			if strings.Contains(string(raw), forbidden) {
 				t.Errorf("%s retains forbidden runtime symbol %q", name, forbidden)
 			}
 		}
 	}
+}
+
+func TestOpenAIIntentLanguageFallback(t *testing.T) {
+	t.Run("missing language uses classifier and aggregates usage", func(t *testing.T) {
+		calls := 0
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			var request struct {
+				Messages       []map[string]string `json:"messages"`
+				ResponseFormat map[string]string   `json:"response_format"`
+			}
+			if json.NewDecoder(r.Body).Decode(&request) != nil || request.ResponseFormat["type"] != "json_object" {
+				t.Fatal("invalid JSON request")
+			}
+			content := `{"intent":"server_operation","response":"","reason":"fresh data"}`
+			usage := map[string]int{"prompt_tokens": 7, "completion_tokens": 3}
+			system := request.Messages[0]["content"]
+			switch {
+			case strings.Contains(system, "language classifier"):
+				content = `{"language_code":"id"}`
+				usage = map[string]int{"prompt_tokens": 4, "completion_tokens": 1}
+			case strings.Contains(system, "final policy gate"):
+				content = `{"decision":"allow","reason":"in scope"}`
+				usage = map[string]int{"prompt_tokens": 5, "completion_tokens": 2}
+			}
+			out, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}, "usage": usage})
+			_, _ = w.Write(out)
+		}))
+		defer provider.Close()
+
+		route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "periksa server", nil)
+		if err != nil || route.LanguageCode != "id" || calls != 3 || usage.InputTokens != 16 || usage.OutputTokens != 6 {
+			t.Fatalf("route=%+v usage=%+v calls=%d err=%v", route, usage, calls, err)
+		}
+	})
+
+	t.Run("malformed classifier fails closed after two retries", func(t *testing.T) {
+		calls := 0
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			content := `{"intent":"server_operation","language_code":"und","response":"","reason":"fresh data"}`
+			if calls > 1 {
+				content = `{"language_code":"und"}`
+			}
+			out, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}, "usage": map[string]int{"prompt_tokens": 2, "completion_tokens": 1}})
+			_, _ = w.Write(out)
+		}))
+		defer provider.Close()
+
+		_, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, "check", nil)
+		if err == nil || calls != 4 || usage.InputTokens != 8 || usage.OutputTokens != 4 {
+			t.Fatalf("usage=%+v calls=%d err=%v", usage, calls, err)
+		}
+	})
 }
 
 func TestReadOnlyCommandGuardCorpus(t *testing.T) {
@@ -320,6 +374,24 @@ func TestOpenAIIntentRouterProviderSafety(t *testing.T) {
 func TestChatPolicies(t *testing.T) {
 	if !validChatPolicy("approval_required") || !validChatPolicy("explain_only") || validChatPolicy("read_only") || validChatPolicy("") {
 		t.Fatal("chat policy validation contract broken")
+	}
+}
+
+func TestEffectiveIntent(t *testing.T) {
+	tests := []struct{ policy, route, want string }{
+		{"approval_required", "server_explanation", "server_operation"},
+		{"approval_required", "server_operation", "server_operation"},
+		{"approval_required", "conversation", "conversation"},
+		{"approval_required", "reject", "reject"},
+		{"explain_only", "server_operation", "server_explanation"},
+		{"explain_only", "server_explanation", "server_explanation"},
+		{"explain_only", "conversation", "conversation"},
+		{"explain_only", "reject", "reject"},
+	}
+	for _, tc := range tests {
+		if got := effectiveIntent(tc.policy, tc.route); got != tc.want {
+			t.Errorf("effectiveIntent(%q, %q) = %q, want %q", tc.policy, tc.route, got, tc.want)
+		}
 	}
 }
 

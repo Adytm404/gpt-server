@@ -70,7 +70,10 @@
   .thread-main { border: 0; }
   .thread-header { padding: 0 15px; }
   .conversation { padding: 21px 14px; }
-  .message { grid-template-columns: 27px 1fr; gap: 8px; }
+  .message { gap: 8px; }
+  .message-content { max-width: 94%; }
+  .user-message .message-content { max-width: 90%; }
+  .operation-message .message-content { max-width: calc(100% - 35px); }
   .plan-head { align-items: flex-start; }
   .plan-head .risk-badge { white-space: nowrap; }
   .thread-composer { padding: 10px; }
