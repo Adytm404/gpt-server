@@ -433,8 +433,8 @@ describe('real chat workspace', () => {
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
     })
-    renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
-    await userEvent.click(await screen.findByRole('button', { name: 'Thread actions' }))
+    renderWithThreads(<RecentChats />)
+    await userEvent.click(await screen.findByRole('button', { name: `Actions for ${thread.title}` }))
     await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(screen.getByRole('dialog', { name: 'Delete chat?' })).toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([url],) => String(url).endsWith('/chat/threads/thread-1') && fetchMock.mock.calls.find(call => call[0] === url)?.[1]?.method === 'DELETE')).toBe(false)
@@ -566,20 +566,21 @@ describe('real chat workspace', () => {
     vi.unstubAllGlobals()
   })
 
-  it('hides archive and delete while operation is busy', async () => {
+  it('toggles terminal preview minimize in thread page', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
       if (url.endsWith('/messages')) return json({ messages: [] })
-      if (url.includes('/operations?')) return json({ operations: [{ ...operation, status: 'running' }] })
+      if (url.includes('/operations?')) return json({ operations: [operation] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       if (url.endsWith('/chat/config')) return json({ configured: true, model_id: 'model-1', monthly_token_limit: 1000, used_tokens: 0 })
       return json(thread)
     })
     renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
-    await userEvent.click(await screen.findByRole('button', { name: 'Thread actions' }))
-    expect(screen.getByText('Cancel operation first to archive or delete.')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Archive' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+    expect(await screen.findByText('SSH terminal')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Minimize terminal' }))
+    expect(screen.queryByText('SSH terminal')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Show terminal' }))
+    expect(screen.getByText('SSH terminal')).toBeInTheDocument()
   })
 
   it('refetches but keeps stream open for summary after backend completed event', async () => {

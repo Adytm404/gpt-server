@@ -65,12 +65,73 @@ function relativeTime(value?: string) {
 }
 
 export function RecentChats() {
-  const { threads, loading, error } = useChatThreads()
+  const { threads, loading, error, refresh } = useChatThreads()
+  const dialog = useDialog()
+  const navigate = useNavigate()
+  const [menuThreadId, setMenuThreadId] = useState<string | null>(null)
+  const [busyThreadId, setBusyThreadId] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleDown = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuThreadId(null)
+      }
+    }
+    document.addEventListener('mousedown', handleDown)
+    return () => document.removeEventListener('mousedown', handleDown)
+  }, [])
+
+  const handleRename = async (thread: ChatThread) => {
+    setMenuThreadId(null)
+    setBusyThreadId(thread.id)
+    const title = (await dialog.prompt({ title: 'Rename chat', description: 'Give this operational thread a concise title.', label: 'Thread title', initialValue: thread.title, confirmLabel: 'Save title' }))?.trim()
+    if (!title) { setBusyThreadId(null); return }
+    try {
+      await chatApi.updateThread(thread.id, { title, status: 'active' })
+      await refresh()
+    } catch (caught) {
+      await dialog.notice({ title: 'Unable to rename chat', description: caught instanceof Error ? caught.message : 'Unable to rename chat', tone: 'destructive' })
+    } finally {
+      setBusyThreadId(null)
+    }
+  }
+
+  const handleArchive = async (thread: ChatThread) => {
+    setMenuThreadId(null)
+    setBusyThreadId(thread.id)
+    try {
+      await chatApi.updateThread(thread.id, { title: thread.title, status: 'archived' })
+      await refresh()
+      navigate('/chat')
+    } catch (caught) {
+      await dialog.notice({ title: 'Unable to archive chat', description: caught instanceof Error ? caught.message : 'Unable to archive chat', tone: 'destructive' })
+    } finally {
+      setBusyThreadId(null)
+    }
+  }
+
+  const handleDelete = async (thread: ChatThread) => {
+    setMenuThreadId(null)
+    setBusyThreadId(thread.id)
+    const confirmed = await dialog.confirm({ title: 'Delete chat?', description: `“${thread.title}” and its conversation history will be permanently removed.`, confirmLabel: 'Delete chat', tone: 'destructive' })
+    if (!confirmed) { setBusyThreadId(null); return }
+    try {
+      await chatApi.deleteThread(thread.id)
+      await refresh()
+      navigate('/chat')
+    } catch (caught) {
+      await dialog.notice({ title: 'Unable to delete chat', description: caught instanceof Error ? caught.message : 'Unable to delete chat', tone: 'destructive' })
+    } finally {
+      setBusyThreadId(null)
+    }
+  }
+
   return <div className="sidebar-history"><div><span>Recent chats</span><NavLink to="/chat" aria-label="New chat"><Plus size={14} /></NavLink></div>
     {loading && <p className="chat-list-state">Loading chats...</p>}
     {!loading && error && <p className="chat-list-state" role="alert">{error}</p>}
     {!loading && !error && threads.length === 0 && <p className="chat-list-state">No recent chats</p>}
-    {threads.map(thread => <NavLink key={thread.id} to={`/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active')}><MessageSquare size={13} /><span><b>{thread.title}</b><small>{thread.serverName || 'Server scope unavailable'}</small></span><em>{relativeTime(thread.updatedAt || thread.createdAt)}</em></NavLink>)}
+    {threads.map(thread => <div key={thread.id} className="history-link-container" ref={menuThreadId === thread.id ? menuRef : undefined}><NavLink to={`/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active')}><MessageSquare size={13} /><span><b>{thread.title}</b><small>{thread.serverName || 'Server scope unavailable'}</small></span><em>{relativeTime(thread.updatedAt || thread.createdAt)}</em></NavLink><button type="button" className="history-menu-trigger" aria-label={`Actions for ${thread.title}`} disabled={busyThreadId === thread.id} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuThreadId(current => current === thread.id ? null : thread.id) }}><MoreHorizontal size={13} /></button>{menuThreadId === thread.id && <div className="history-dropdown-menu" role="menu"><button type="button" onClick={() => void handleRename(thread)}>Rename</button><button type="button" onClick={() => void handleArchive(thread)}>Archive</button><button type="button" className="danger" onClick={() => void handleDelete(thread)}>Delete</button></div>}</div>)}
   </div>
 }
 
@@ -342,6 +403,7 @@ export function ChatThreadPage() {
   const [menu, setMenu] = useState(false)
   const [pending, setPending] = useState<{ id: string; content: string; policy: ChatPolicy } | null>(null)
   const [actionPending, setActionPending] = useState(false)
+  const [terminalMinimized, setTerminalMinimized] = useState(false)
   const mounted = useRef(true)
   const currentId = useRef(id)
   const loadGeneration = useRef(0)
@@ -453,13 +515,13 @@ export function ChatThreadPage() {
   const timeline = buildTimeline(messages, operations, showStreamedSummary ? summaryMessageId : undefined)
   const renderMessage = (message: ChatMessage) => <div className={cn('message', message.role === 'user' ? 'user-message right-message' : 'ai-message left-message', message.kind === 'result' && 'result-message')} key={message.id} data-testid={`message-${message.id}`}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div>{message.role === 'user' ? <p>{message.content}</p> : <MarkdownMessage>{message.content}</MarkdownMessage>}{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>
   const renderStreamedSummary = () => <div className="message ai-message left-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI is explaining results...</span>}</div><MarkdownMessage streaming={summaryPhase === 'summarizing'}>{summaryText}</MarkdownMessage></div></div>
-  return <div className="thread-layout page-enter"><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div><div className="thread-menu"><button className="icon-button bordered" disabled={actionPending} onClick={() => setMenu(value => !value)} aria-label="Thread actions"><MoreHorizontal size={18} /></button>{menu && <div><button disabled={actionPending} onClick={() => void rename()}>Rename</button>{busy ? <span className="thread-menu-blocked">Cancel operation first to archive or delete.</span> : <><button disabled={actionPending} onClick={() => void archive()}>Archive</button><button className="danger" disabled={actionPending} onClick={() => void remove()}>Delete</button></>}</div>}</div></div>
+  return <div className={cn('thread-layout page-enter', terminalMinimized && 'terminal-minimized')}><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div>{operation && <button className="icon-button bordered" onClick={() => setTerminalMinimized(val => !val)} aria-label={terminalMinimized ? 'Show terminal' : 'Minimize terminal'} title={terminalMinimized ? 'Show terminal' : 'Minimize terminal'}><Terminal size={17} /></button>}</div>
     {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
     <div className="conversation">{messages.length === 0 && operations.length === 0 && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{timeline.map(item => item.type === 'message' ? renderMessage(item.message) : <Fragment key={item.operation.id}><div className="message ai-message left-message operation-message" data-testid={`operation-${item.operation.id}`}><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={item.operation} summarizing={item.operation.id === operation?.id && summaryPhase === 'summarizing'} agentThinking={item.operation.id === operation?.id && agentThinking} actionPending={actionPending} mutate={item.operation.id === operation?.id ? mutate : undefined} /></div></div>{showStreamedSummary && item.operation.id === operation?.id && renderStreamedSummary()}</Fragment>)}
     {pending && <><div className="message user-message right-message" key={pending.id}><div className="message-avatar">YOU</div><div className="message-content"><div className="message-meta"><strong>You</strong><span>now</span></div><p>{pending.content}</p><span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span></div></div><div className="message ai-message left-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong><span className="tiny-spinner" /></div><p>{pending.policy === 'explain_only' ? 'OpsAI is analyzing server snapshot...' : 'OpsAI is processing request and determining steps...'}</p></div></div></>}
     <div ref={endRef} /></div>
     <div className="thread-composer"><Composer compact servers={[]} selectedServer={thread.serverId} onSubmit={followUp} disabled={busy || Boolean(pending)} disabledReason={busy ? `Follow-up unavailable while operation is ${operation?.status.replaceAll('_', ' ')}.` : ''} busy={busy} onCancel={operation && busyStatuses.has(operation.status) ? () => void mutate('cancel') : undefined} /></div></section>
-    {operation && <ExecutionPanel operation={operation} events={events} connection={connection} cancel={() => mutate('cancel')} actionPending={actionPending} />}
+    {operation && !terminalMinimized && <ExecutionPanel operation={operation} events={events} connection={connection} cancel={() => mutate('cancel')} actionPending={actionPending} />}
   </div>
 }
 
