@@ -61,7 +61,8 @@ func requestOpenAIIntent(ctx context.Context, client *http.Client, model planner
 	for attempt := 0; attempt < 3; attempt++ {
 		raw, requestErr := requestOpenAIJSON(ctx, client, model, allowedOrigins, payload)
 		if requestErr != nil {
-			return intentRoute{}, totalUsage, requestErr
+			lastErr = requestErr
+			continue
 		}
 		route, usage, parseErr := parseIntentResponse(raw)
 		totalUsage.InputTokens += usage.InputTokens
@@ -106,7 +107,8 @@ func requestOpenAILanguage(ctx context.Context, client *http.Client, model plann
 	for attempt := 0; attempt < 3; attempt++ {
 		raw, requestErr := requestOpenAIJSON(ctx, client, model, allowedOrigins, payload)
 		if requestErr != nil {
-			return "", totalUsage, requestErr
+			lastErr = requestErr
+			continue
 		}
 		languageCode, usage, parseErr := parseLanguageResponse(raw)
 		totalUsage.InputTokens += usage.InputTokens
@@ -135,7 +137,8 @@ func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model 
 	for attempt := 0; attempt < 2; attempt++ {
 		raw, requestErr := requestOpenAIJSON(ctx, client, model, allowedOrigins, payload)
 		if requestErr != nil {
-			return scopeDecision{}, totalUsage, requestErr
+			lastErr = requestErr
+			continue
 		}
 		decision, usage, parseErr := parseScopeDecisionResponse(raw)
 		totalUsage.InputTokens += usage.InputTokens

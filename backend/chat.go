@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -439,6 +441,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	route, routeUsage, routeErr := requestOpenAIIntent(routeCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, in.Content, serverContext)
 	routeCancel()
 	if routeErr != nil {
+		log.Printf("chat intent routing failed request_id=%s: %v", middleware.GetReqID(r.Context()), routeErr)
 		s.writeError(w, r, 502, "model could not route the request")
 		return
 	}

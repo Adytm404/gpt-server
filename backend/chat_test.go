@@ -535,6 +535,28 @@ func TestOpenAIIntentRouterProviderSafety(t *testing.T) {
 	}
 }
 
+func TestOpenAIIntentRouterRetriesTransientProviderFailure(t *testing.T) {
+	calls := 0
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			http.Error(w, "temporary failure", http.StatusInternalServerError)
+			return
+		}
+		content := `{"intent":"server_operation","language_code":"id","response":"","reason":"fresh server data"}`
+		if calls == 3 {
+			content = `{"decision":"allow","reason":"selected server diagnostic"}`
+		}
+		out, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}, "usage": map[string]int{"prompt_tokens": 2, "completion_tokens": 1}})
+		_, _ = w.Write(out)
+	}))
+	defer provider.Close()
+	route, usage, err := requestOpenAIIntent(context.Background(), provider.Client(), plannerModel{BaseURL: provider.URL, ExternalID: "test"}, map[string]struct{}{provider.URL: {}}, `cari folder "nirvaya" trs cek ukuran foldernya berapa`, nil)
+	if err != nil || route.Intent != "server_operation" || route.LanguageCode != "id" || calls != 3 || usage.InputTokens != 4 || usage.OutputTokens != 2 {
+		t.Fatalf("route=%+v usage=%+v calls=%d err=%v", route, usage, calls, err)
+	}
+}
+
 func TestChatPolicies(t *testing.T) {
 	if !validChatPolicy("approval_required") || !validChatPolicy("explain_only") || validChatPolicy("read_only") || validChatPolicy("") {
 		t.Fatal("chat policy validation contract broken")
