@@ -18,7 +18,7 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 			names = append(names, entry.Name())
 		}
 	}
-	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql", "012_operation_summaries.sql"}
+	want := []string{"001_auth.sql", "002_catalog_servers.sql", "003_legacy_servers_health.sql", "004_legacy_audit_defaults.sql", "005_remove_dummy_catalog.sql", "006_ai_models_base_url.sql", "007_ai_model_api_keys.sql", "008_server_auth_methods.sql", "009_server_inventory.sql", "010_chat_operations.sql", "011_one_active_operation_per_thread.sql", "012_operation_summaries.sql", "013_llm_intent_routing.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("migration order = %v, want %v", names, want)
 	}
@@ -44,6 +44,22 @@ func TestEmbeddedMigrationOrderAndLegacyServerRepair(t *testing.T) {
 	}
 	if strings.Contains(content, "legacy_column") || strings.Contains(content, "information_schema.columns\n        WHERE") && strings.Contains(content, "column_name NOT IN") {
 		t.Fatal("003 migration must not relax unknown columns")
+	}
+}
+
+func TestLLMIntentRoutingMigration(t *testing.T) {
+	raw, err := migrationFiles.ReadFile("migrations/013_llm_intent_routing.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	for _, clause := range []string{"response_language text NOT NULL DEFAULT 'en'", "'routing'", "DROP INDEX IF EXISTS token_usage_message_id_idx", "token_usage_message_phase_idx", "ON token_usage(message_id, phase)"} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("013 migration missing %q", clause)
+		}
+	}
+	if strings.Contains(content, "INSERT INTO") {
+		t.Fatal("013 migration contains seeds")
 	}
 }
 

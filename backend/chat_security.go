@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const (
@@ -15,10 +16,6 @@ const (
 )
 
 var (
-	serverIntentPattern  = regexp.MustCompile(`(?i)\b(server|service|layanan|systemd|systemctl|journal|logs?|uptime|cpu|memory|memori|ram|disk|storage|penyimpanan|ruang|kapasitas|filesystem|file system|process|proses|docker|container|hostname|kernel|load|health|kesehatan|status|failed|gagal|running)\b`)
-	actionIntentPattern  = regexp.MustCompile(`(?i)\b(check|show|inspect|explain|diagnose|list|view|monitor|troubleshoot|why|what|is|are|get|remaining|available|cek|periksa|lihat|jelaskan|tampilkan|diagnosa|diagnosis|pantau|mengapa|kenapa|berapa|sisa|tersedia|terpakai|digunakan)\b`)
-	deniedPromptPattern  = regexp.MustCompile(`(?i)(ignore (all |any |the )?(previous|prior|system|developer) instructions?|abaikan (semua )?(instruksi|perintah)|system prompt|reveal .{0,30}(secret|instruction)|bocorkan .{0,30}(rahasia|kunci|instruksi)|api[ _-]?key|private[ _-]?key|kunci (api|privat|rahasia)|password|kata sandi|credential|kredensial|environment (variables?|dump)|\benv dump\b|https?://|\b(logs?|journal|curl|wget|netcat|\bnc\b|nmap|port scan|network scan|ssh to|connect to|another (host|server))\b|creative writ|write (a )?(poem|story|essay)|tulis(kan)? (sebuah )?(puisi|cerita|esai)|general trivia|stock price|investment|cryptocurrency|credit card)`)
-	hostLikePattern      = regexp.MustCompile(`(?i)(\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[a-z0-9-]+\.(?:com|net|org|io|dev|local|internal|cloud)\b)`)
 	asciiTokenPattern    = regexp.MustCompile(`^[A-Za-z0-9-][A-Za-z0-9_.@:-]{0,127}$`)
 	serviceTokenPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@:-]{0,127}$`)
 	summaryIPPattern     = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
@@ -30,46 +27,16 @@ var (
 	}
 )
 
-func preferredResponseLanguage(prompt string) string {
-	indonesian := regexp.MustCompile(`(?i)\b(lihat|cek|periksa|penyimpanan|ruang|kapasitas|sisa|berapa|sekarang|kenapa|mengapa|tampilkan|layanan|memori|proses|kesehatan|gagal|berjalan)\b`)
-	if indonesian.MatchString(prompt) {
-		return "Bahasa Indonesia"
-	}
-	return "English"
-}
-
-func validateChatPrompt(content string) error {
-	if err := validateChatContent(content); err != nil {
-		return err
-	}
-	if deniedPromptPattern.MatchString(content) || hostLikePattern.MatchString(content) {
-		return errors.New("request is outside permitted server management scope")
-	}
-	if !serverIntentPattern.MatchString(content) || !actionIntentPattern.MatchString(content) {
-		return errors.New("request is outside permitted server management scope")
-	}
-	return nil
-}
-
 func validateChatContent(content string) error {
-	if content != strings.TrimSpace(content) || content == "" || len([]rune(content)) > maxChatContent || strings.ContainsAny(content, "\x00\r") {
+	if content != strings.TrimSpace(content) || content == "" || len([]rune(content)) > maxChatContent {
 		return errors.New("invalid chat content")
 	}
+	for _, r := range content {
+		if unicode.IsControl(r) {
+			return errors.New("invalid chat content")
+		}
+	}
 	return nil
-}
-
-func localChatResponse(content string) (string, bool) {
-	if validateChatContent(content) != nil {
-		return "", false
-	}
-	normalized := strings.ToLower(strings.TrimSpace(content))
-	normalized = strings.Trim(normalized, "!.,? ")
-	switch normalized {
-	case "halo", "hai", "hello", "hi", "hey", "halo opsai", "hai opsai", "help", "bantuan", "bantu saya", "apa yang bisa kamu lakukan", "what can you do", "test", "testing", "testing chat", "tes", "tes chat":
-		return "Halo! Saya siap membantu memeriksa kesehatan, resource, service, container, dan status server yang dipilih. Jelaskan pemeriksaan server yang ingin dilakukan.", true
-	default:
-		return "", false
-	}
 }
 
 type planStep struct {

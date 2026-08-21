@@ -386,11 +386,12 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 	var threadID, modelID uuid.UUID
 	var model plannerModel
 	var ciphertext []byte
-	err := s.db.QueryRow(ctx, `SELECT o.thread_id,o.model_id,m.base_url,m.external_model_id,m.api_key_ciphertext,o.title,o.summary,
+	var languageCode string
+	err := s.db.QueryRow(ctx, `SELECT o.thread_id,o.model_id,m.base_url,m.external_model_id,m.api_key_ciphertext,o.response_language,o.title,o.summary,
 		COALESCE((SELECT cm.content FROM operation_events e JOIN chat_messages cm ON cm.id=(e.payload->>'message_id')::uuid WHERE e.operation_id=o.id AND e.event_type='planning' ORDER BY e.id LIMIT 1),''),
 		jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'status',s.status,'last_checked_at',s.last_checked_at,
 		'health',COALESCE((SELECT jsonb_build_object('status',h.status,'cpu_percent',h.cpu_percent,'memory_percent',h.memory_percent,'disk_percent',h.disk_percent,'services',h.services,'checked_at',h.checked_at) FROM server_health_snapshots h WHERE h.server_id=s.id ORDER BY h.checked_at DESC LIMIT 1),'{}'::jsonb))
-		FROM operations o JOIN ai_models m ON m.id=o.model_id JOIN servers s ON s.id=o.server_id WHERE o.id=$1 AND o.workspace_id=$2 AND o.status='summarizing'`, id, workspaceID).Scan(&threadID, &modelID, &model.BaseURL, &model.ExternalID, &ciphertext, &input.Title, &input.Plan, &input.Request, &input.Server)
+		FROM operations o JOIN ai_models m ON m.id=o.model_id JOIN servers s ON s.id=o.server_id WHERE o.id=$1 AND o.workspace_id=$2 AND o.status='summarizing'`, id, workspaceID).Scan(&threadID, &modelID, &model.BaseURL, &model.ExternalID, &ciphertext, &languageCode, &input.Title, &input.Plan, &input.Request, &input.Server)
 	if err == nil && len(ciphertext) > 0 {
 		model.APIKey, err = decryptModelAPIKey(s.cfg.modelKeyEncryptionKey, ciphertext)
 	}
@@ -414,7 +415,6 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 		}
 	}
 	input = boundSummaryInput(input)
-	language := preferredResponseLanguage(input.Request)
 	var pending strings.Builder
 	flush := func() {
 		if pending.Len() == 0 {
@@ -438,7 +438,7 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 	var usage plannerUsage
 	if err == nil {
 		requestCtx, cancel := context.WithTimeout(ctx, s.cfg.modelRequestTimeout)
-		content, usage, err = requestOpenAISummary(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, language, input, onDelta)
+		content, usage, err = requestOpenAISummary(requestCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model, s.cfg.modelAllowedOrigins, languageCode, input, onDelta)
 		cancel()
 	}
 	if ctx.Err() != nil {
@@ -446,7 +446,7 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 	}
 	if err != nil {
 		pending.Reset()
-		content = summaryFallback(language)
+		content = summaryFallback(languageCode)
 		onDelta(content)
 		flush()
 		s.persistOperationSummary(id, workspaceID, threadID, modelID, content, plannerUsage{}, true)
@@ -456,8 +456,8 @@ func (s *server) summarizeOperation(ctx context.Context, id, workspaceID uuid.UU
 	s.persistOperationSummary(id, workspaceID, threadID, modelID, redactSummaryOutput(content), usage, false)
 }
 
-func summaryFallback(language string) string {
-	if language == "Bahasa Indonesia" {
+func summaryFallback(languageCode string) string {
+	if languageCode == "id" {
 		return "Pemeriksaan teknis selesai, tetapi ringkasan AI tidak tersedia. Tinjau output terminal untuk melihat hasil setiap langkah."
 	}
 	return "Technical checks completed, but the AI summary is unavailable. Review terminal output for each step's results."
@@ -501,7 +501,7 @@ func (s *server) persistOperationSummary(id, workspaceID, threadID, modelID uuid
 	if err != nil {
 		log.Printf("operation %s summary persistence failed: %v", id, err)
 		_, _ = s.db.Exec(context.Background(), `UPDATE operations SET status='succeeded',error='AI summary persistence failed',finished_at=now(),updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='summarizing'`, id, workspaceID)
-		_ = insertOperationEvent(context.Background(), s.db, id, "summary.failed", uuid.Nil, map[string]any{"chunk": summaryFallback("English")})
+		_ = insertOperationEvent(context.Background(), s.db, id, "summary.failed", uuid.Nil, map[string]any{"chunk": summaryFallback("en")})
 		_ = insertOperationEvent(context.Background(), s.db, id, "completed", uuid.Nil, map[string]any{"status": "succeeded"})
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type chatThreadResponse struct {
@@ -372,14 +373,6 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if response, local := localChatResponse(in.Content); local {
-		s.createLocalChatMessage(w, r, threadID, a.WorkspaceID, in.Content, response)
-		return
-	}
-	if validateChatPrompt(in.Content) != nil {
-		s.writeError(w, r, 422, "request is outside permitted server management scope")
-		return
-	}
 	if !s.planningLimiter.allow(planningRateKey(a.UserID, a.WorkspaceID), time.Now()) {
 		s.writeError(w, r, 429, "too many planning requests")
 		return
@@ -392,17 +385,9 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, r, err)
 		return
 	}
-	if in.Policy == "explain_only" {
-		s.createExplanation(w, r, threadID, a, in.Content, serverContext)
-		return
-	}
 	active, err := s.hasActiveOperation(r.Context(), threadID, a.WorkspaceID)
 	if err != nil {
 		s.dbError(w, r, err)
-		return
-	}
-	if active {
-		s.writeError(w, r, http.StatusConflict, "thread already has an active operation")
 		return
 	}
 	localUnlock := s.lockPlanningWorkspace(a.WorkspaceID)
@@ -444,13 +429,39 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, r, err)
 		return
 	}
+	routeCtx, routeCancel := context.WithTimeout(r.Context(), s.cfg.modelRequestTimeout)
+	route, routeUsage, routeErr := requestOpenAIIntent(routeCtx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, in.Content, serverContext)
+	routeCancel()
+	if routeErr != nil {
+		s.writeError(w, r, 502, "model could not route the request")
+		return
+	}
+	if route.Intent == "reject" {
+		s.writeError(w, r, 422, "request is outside permitted server management scope")
+		return
+	}
+	if route.Intent == "conversation" || route.Intent == "server_explanation" {
+		s.persistRoutedResponse(w, r, conn, threadID, a.WorkspaceID, model, in.Content, route.Response, routeUsage)
+		return
+	}
+	if in.Policy == "explain_only" {
+		s.createExplanation(w, r, conn, threadID, a, model, in.Content, route.LanguageCode, serverContext, routeUsage)
+		return
+	}
+	if active {
+		s.writeError(w, r, http.StatusConflict, "thread already has an active operation")
+		return
+	}
 	opID, msgID := uuid.New(), uuid.New()
 	tx, err := conn.Begin(r.Context())
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3)`, msgID, threadID, in.Content)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy) VALUES($1,$2,$3,$4,$5,$6,$7,'planning',$8)`, opID, threadID, a.WorkspaceID, serverID, serverUpdatedAt, a.UserID, model.ID, in.Policy)
+		_, err = tx.Exec(r.Context(), `INSERT INTO operations(id,thread_id,workspace_id,server_id,server_updated_at,created_by,model_id,status,policy,response_language) VALUES($1,$2,$3,$4,$5,$6,$7,'planning',$8,$9)`, opID, threadID, a.WorkspaceID, serverID, serverUpdatedAt, a.UserID, model.ID, in.Policy, route.LanguageCode)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,$4,$5,'routing',$6,$7::bigint,$8::bigint,$7::bigint+$8::bigint,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, opID, msgID, model.ID, routeUsage.InputTokens, routeUsage.OutputTokens)
 	}
 	if err == nil {
 		err = insertOperationEvent(r.Context(), tx, opID, "planning", uuid.Nil, map[string]any{"message_id": msgID})
@@ -476,7 +487,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	s.operationCancels[opID] = cancel
 	s.cancelMu.Unlock()
-	plan, usage, planErr := requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, in.Content, serverContext)
+	plan, usage, planErr := requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, route.LanguageCode, in.Content, serverContext)
 	cancel()
 	s.cancelMu.Lock()
 	delete(s.operationCancels, opID)
@@ -545,40 +556,9 @@ func validChatPolicy(policy string) bool {
 	return policy == "approval_required" || policy == "explain_only"
 }
 
-func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, threadID uuid.UUID, a sessionAuth, content string, serverContext map[string]any) {
-	localUnlock := s.lockPlanningWorkspace(a.WorkspaceID)
-	defer localUnlock()
-	conn, err := s.db.Acquire(r.Context())
-	if err != nil {
-		s.dbError(w, r, err)
-		return
-	}
-	defer conn.Release()
-	lockKey := "chat-planning:" + a.WorkspaceID.String()
-	if _, err = conn.Exec(r.Context(), `SELECT pg_advisory_lock(hashtextextended($1, 0))`, lockKey); err != nil {
-		s.dbError(w, r, err)
-		return
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, lockKey)
-	}()
-	model, err := s.resolvePlannerWith(r.Context(), conn, a.WorkspaceID)
-	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, errNoEntitlement) {
-		s.writeError(w, r, 409, "workspace AI is not configured")
-		return
-	}
-	if errors.Is(err, errQuotaExceeded) {
-		s.writeError(w, r, 429, err.Error())
-		return
-	}
-	if err != nil {
-		s.dbError(w, r, err)
-		return
-	}
+func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, conn *pgxpool.Conn, threadID uuid.UUID, a sessionAuth, model resolvedPlanner, content, languageCode string, serverContext map[string]any, routeUsage plannerUsage) {
 	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.modelRequestTimeout)
-	response, usage, err := requestOpenAIExplanation(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, content, serverContext)
+	response, usage, err := requestOpenAIExplanation(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, s.cfg.modelAllowedOrigins, languageCode, content, serverContext)
 	cancel()
 	if err != nil {
 		s.writeError(w, r, 502, "model could not explain the server snapshot")
@@ -594,7 +574,10 @@ func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, threa
 		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, assistantID, threadID, response, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'explain',$5,$6,$7,$6+$7,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, assistantID, model.ID, usage.InputTokens, usage.OutputTokens)
+		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'routing',$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, userID, model.ID, routeUsage.InputTokens, routeUsage.OutputTokens)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'explain',$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), a.WorkspaceID, threadID, assistantID, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET updated_at=now() WHERE id=$1 AND workspace_id=$2`, threadID, a.WorkspaceID)
@@ -611,9 +594,9 @@ func (s *server) createExplanation(w http.ResponseWriter, r *http.Request, threa
 	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
 }
 
-func (s *server) createLocalChatMessage(w http.ResponseWriter, r *http.Request, threadID, workspaceID uuid.UUID, content, response string) {
+func (s *server) persistRoutedResponse(w http.ResponseWriter, r *http.Request, conn *pgxpool.Conn, threadID, workspaceID uuid.UUID, model resolvedPlanner, content, response string, usage plannerUsage) {
 	userID, assistantID := uuid.New(), uuid.New()
-	tx, err := s.db.Begin(r.Context())
+	tx, err := conn.Begin(r.Context())
 	if err == nil {
 		var exists bool
 		err = tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM chat_threads WHERE id=$1 AND workspace_id=$2 AND status='active')`, threadID, workspaceID).Scan(&exists)
@@ -622,7 +605,13 @@ func (s *server) createLocalChatMessage(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3),($4,$2,'assistant',$5)`, userID, threadID, content, assistantID, response)
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content) VALUES($1,$2,'user',$3)`, userID, threadID, content)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO chat_messages(id,thread_id,role,content,model_id,input_tokens,output_tokens) VALUES($1,$2,'assistant',$3,$4,$5,$6)`, assistantID, threadID, response, model.ID, usage.InputTokens, usage.OutputTokens)
+	}
+	if err == nil {
+		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'routing',$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), workspaceID, threadID, assistantID, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET updated_at=now() WHERE id=$1 AND workspace_id=$2`, threadID, workspaceID)
@@ -636,7 +625,7 @@ func (s *server) createLocalChatMessage(w http.ResponseWriter, r *http.Request, 
 		s.dbError(w, r, err)
 		return
 	}
-	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: response}, "operation": nil})
+	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
 }
 
 func (s *server) failPlanning(id uuid.UUID, message string) {
