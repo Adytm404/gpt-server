@@ -833,9 +833,67 @@ func TestEventBufferBatchesSmallWritesUntilFlush(t *testing.T) {
 	if b.pending.Len() != 6 {
 		t.Fatalf("pending bytes = %d", b.pending.Len())
 	}
-	b.Flush()
+	b.FinalFlush()
 	if b.pending.Len() != 0 || b.String() != "onetwo" {
 		t.Fatalf("flush pending=%d value=%q", b.pending.Len(), b.String())
+	}
+}
+
+func TestEventBufferFlushesSmallWritesPeriodically(t *testing.T) {
+	b := &eventBuffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	stop := startEventBufferFlush(ctx, 5*time.Millisecond, b)
+	_, _ = b.Write([]byte("live output\n"))
+	deadline := time.Now().Add(time.Second)
+	for {
+		b.mu.Lock()
+		pending := b.pending.Len()
+		b.mu.Unlock()
+		if pending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("small output remained buffered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	stop()
+	if b.String() != "live output\n" {
+		t.Fatalf("buffer=%q", b.String())
+	}
+}
+
+func TestEventBufferKeepsPartialLineUntilFinalFlush(t *testing.T) {
+	b := &eventBuffer{}
+	_, _ = b.Write([]byte("Authorization: Bearer partial"))
+	b.Flush()
+	if b.pending.Len() == 0 {
+		t.Fatal("partial sensitive line flushed before completion")
+	}
+	b.FinalFlush()
+	if b.pending.Len() != 0 {
+		t.Fatal("final flush retained partial line")
+	}
+}
+
+func TestEventBufferKeepsPrivateKeyBlockUntilComplete(t *testing.T) {
+	b := &eventBuffer{}
+	_, _ = b.Write([]byte("safe line\n-----BEGIN OPENSSH PRIVATE KEY-----\nsecret body\n"))
+	b.Flush()
+	b.mu.Lock()
+	pending := b.pending.String()
+	b.mu.Unlock()
+	if !strings.Contains(pending, "BEGIN OPENSSH PRIVATE KEY") || !strings.Contains(pending, "secret body") {
+		t.Fatalf("private key block was split: %q", pending)
+	}
+	_, _ = b.Write([]byte("-----END OPENSSH PRIVATE KEY-----\n"))
+	b.Flush()
+	b.mu.Lock()
+	pending = b.pending.String()
+	b.mu.Unlock()
+	if pending != "" {
+		t.Fatalf("completed block remained pending: %q", pending)
 	}
 }
 

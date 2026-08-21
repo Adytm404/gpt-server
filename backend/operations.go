@@ -832,13 +832,15 @@ func (s *server) runOperationStep(parent context.Context, client *ssh.Client, op
 	defer session.Close()
 	stdout := newEventBuffer(s, opID, step.ID, "stdout")
 	stderr := newEventBuffer(s, opID, step.ID, "stderr")
+	stopLiveFlush := startEventBufferFlush(ctx, 250*time.Millisecond, stdout, stderr)
 	session.Stdout = stdout
 	session.Stderr = stderr
 	done := make(chan error, 1)
 	go func() { done <- session.Run(command) }()
 	err = waitSSHCommand(ctx, session, done)
-	stdout.Flush()
-	stderr.Flush()
+	stopLiveFlush()
+	stdout.FinalFlush()
+	stderr.FinalFlush()
 	exitCode := 0
 	if err != nil {
 		exitCode = -1
@@ -889,10 +891,35 @@ type eventBuffer struct {
 	mu           sync.Mutex
 	buf          bytes.Buffer
 	truncated    bool
+	closed       bool
 	s            *server
 	opID, stepID uuid.UUID
 	event        string
 	pending      bytes.Buffer
+}
+
+func startEventBufferFlush(ctx context.Context, interval time.Duration, buffers ...*eventBuffer) func() {
+	flushCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-flushCtx.Done():
+				return
+			case <-ticker.C:
+				for _, buffer := range buffers {
+					buffer.Flush()
+				}
+			}
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func newEventBuffer(s *server, opID, stepID uuid.UUID, event string) *eventBuffer {
@@ -900,6 +927,10 @@ func newEventBuffer(s *server, opID, stepID uuid.UUID, event string) *eventBuffe
 }
 func (b *eventBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return len(p), nil
+	}
 	remain := maxOperationOutput - b.buf.Len()
 	chunk := p
 	if remain <= 0 {
@@ -913,28 +944,64 @@ func (b *eventBuffer) Write(p []byte) (int, error) {
 		_, _ = b.buf.Write(chunk)
 		_, _ = b.pending.Write(chunk)
 	}
-	var eventChunk []byte
 	if b.pending.Len() >= 4096 {
-		eventChunk = append([]byte(nil), b.pending.Bytes()...)
-		b.pending.Reset()
+		b.flushCompleteRecordsLocked()
 	}
-	b.mu.Unlock()
-	b.emit(eventChunk)
 	return len(p), nil
 }
 func (b *eventBuffer) Flush() {
 	b.mu.Lock()
-	chunk := append([]byte(nil), b.pending.Bytes()...)
-	b.pending.Reset()
-	b.mu.Unlock()
-	b.emit(chunk)
+	defer b.mu.Unlock()
+	b.flushCompleteRecordsLocked()
 }
-func (b *eventBuffer) emit(chunk []byte) {
-	if len(chunk) == 0 || b.s == nil || b.s.db == nil {
+func (b *eventBuffer) FinalFlush() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	chunk := append([]byte(nil), b.pending.Bytes()...)
+	if b.emitLocked(chunk) {
+		b.pending.Reset()
+	}
+	b.closed = true
+}
+func (b *eventBuffer) flushCompleteRecordsLocked() {
+	raw := b.pending.Bytes()
+	end := bytes.LastIndexAny(raw, "\n\r")
+	if end < 0 {
 		return
 	}
+	if start := incompletePrivateKeyBlockStart(raw); start >= 0 {
+		end = bytes.LastIndexAny(raw[:start], "\n\r")
+		if end < 0 {
+			return
+		}
+	}
+	chunk := append([]byte(nil), raw[:end+1]...)
+	if !b.emitLocked(chunk) {
+		return
+	}
+	remainder := append([]byte(nil), raw[end+1:]...)
+	b.pending.Reset()
+	_, _ = b.pending.Write(remainder)
+}
+func incompletePrivateKeyBlockStart(raw []byte) int {
+	begin := bytes.LastIndex(raw, []byte("-----BEGIN "))
+	if begin < 0 || !bytes.Contains(raw[begin:], []byte("PRIVATE KEY-----")) {
+		return -1
+	}
+	end := bytes.LastIndex(raw, []byte("-----END "))
+	if end < begin || !bytes.Contains(raw[end:], []byte("PRIVATE KEY-----")) {
+		return begin
+	}
+	return -1
+}
+func (b *eventBuffer) emitLocked(chunk []byte) bool {
+	if len(chunk) == 0 || b.s == nil || b.s.db == nil {
+		return true
+	}
 	safe := redactOperationalOutput(strings.ToValidUTF8(string(chunk), ""))
-	_ = insertOperationEvent(context.Background(), b.s.db, b.opID, b.event, b.stepID, map[string]any{"chunk": safe})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return insertOperationEvent(ctx, b.s.db, b.opID, b.event, b.stepID, map[string]any{"chunk": safe}) == nil
 }
 func (b *eventBuffer) String() string {
 	b.mu.Lock()
@@ -1007,7 +1074,7 @@ func (s *server) operationEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	heartbeat := time.NewTicker(15 * time.Second)
-	poll := time.NewTicker(500 * time.Millisecond)
+	poll := time.NewTicker(200 * time.Millisecond)
 	defer heartbeat.Stop()
 	defer poll.Stop()
 	terminalSince := time.Time{}
