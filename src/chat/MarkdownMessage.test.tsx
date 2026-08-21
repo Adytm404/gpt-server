@@ -18,6 +18,6 @@ it('does not render raw HTML or unsafe links', () => {
 })
 
 it('shows a cursor while streaming', () => {
-  const { container } = render(<MarkdownMessage streaming>**Sedang** menjelaskan</MarkdownMessage>)
+  const { container } = render(<MarkdownMessage streaming>**Streaming** summary</MarkdownMessage>)
   expect(container.querySelector('.summary-cursor')).toBeInTheDocument()
 })
