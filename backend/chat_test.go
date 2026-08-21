@@ -560,7 +560,7 @@ func TestOpenAIIntentRouterRetriesTransientProviderFailure(t *testing.T) {
 }
 
 func TestChatPolicies(t *testing.T) {
-	if !validChatPolicy("approval_required") || !validChatPolicy("explain_only") || !validChatPolicy("unrestricted_approval") || validChatPolicy("read_only") || validChatPolicy("") {
+	if !validChatPolicy("approval_required") || !validChatPolicy("explain_only") || !validChatPolicy("unrestricted_approval") || !validChatPolicy("autonomous_full_access") || validChatPolicy("read_only") || validChatPolicy("") {
 		t.Fatal("chat policy validation contract broken")
 	}
 }
@@ -582,6 +582,17 @@ func TestUnrestrictedCommandsRequireExplicitPolicy(t *testing.T) {
 		if _, err := serializeOperationCommand("unrestricted_approval", "sh", args); err == nil {
 			t.Fatalf("unsafe shape accepted: %v", args)
 		}
+	}
+}
+
+func TestAutonomousFullAccessUsesUnrestrictedCommands(t *testing.T) {
+	step := planStep{Description: "Install package", Executable: "sh", Args: []string{"-lc", "apt-get install -y speedtest-cli"}}
+	plan := operationPlan{Title: "Install", Summary: "Install package", Risk: "high", Steps: []planStep{step}}
+	if err := validateOperationPlanForPolicy(plan, "autonomous_full_access"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serializeOperationCommand("autonomous_full_access", step.Executable, step.Args); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -625,6 +636,9 @@ func TestMutationEscalatesToApprovedFullAccess(t *testing.T) {
 		t.Fatalf("policy=%q", got)
 	}
 	if got := effectiveOperationPolicy("approval_required", "server_operation"); got != "approval_required" {
+		t.Fatalf("policy=%q", got)
+	}
+	if got := effectiveOperationPolicy("autonomous_full_access", "server_operation"); got != "autonomous_full_access" {
 		t.Fatalf("policy=%q", got)
 	}
 }

@@ -63,7 +63,7 @@ export type OperationEvent = {
   messageId?: string
 }
 
-export type ChatPolicy = 'approval_required' | 'explain_only' | 'unrestricted_approval'
+export type ChatPolicy = 'approval_required' | 'explain_only' | 'unrestricted_approval' | 'autonomous_full_access'
 
 export type ChatConfig = {
   configured: boolean

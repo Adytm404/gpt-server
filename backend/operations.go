@@ -246,7 +246,7 @@ func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	var tag pgconn.CommandTag
 	if err == nil {
-		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status='pending_approval',error='',approved_by=NULL,approved_at=NULL,rejected_by=NULL,rejected_at=NULL,started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='failed'`, id, a.WorkspaceID)
+		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status=CASE WHEN policy='autonomous_full_access' THEN 'approved' ELSE 'pending_approval' END,error='',approved_by=CASE WHEN policy='autonomous_full_access' THEN $3 ELSE NULL END,approved_at=CASE WHEN policy='autonomous_full_access' THEN now() ELSE NULL END,rejected_by=NULL,rejected_at=NULL,started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='failed'`, id, a.WorkspaceID, a.UserID)
 	}
 	if err == nil && tag.RowsAffected() != 1 {
 		s.writeError(w, r, 409, "operation is not retryable")
@@ -262,7 +262,15 @@ func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, r, err)
 		return
 	}
-	s.writeJSON(w, 200, map[string]any{"id": id, "status": "pending_approval"})
+	var status string
+	if err = s.db.QueryRow(r.Context(), `SELECT status FROM operations WHERE id=$1 AND workspace_id=$2`, id, a.WorkspaceID).Scan(&status); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	if status == "approved" {
+		go s.runOperation(id, a.WorkspaceID)
+	}
+	s.writeJSON(w, 200, map[string]any{"id": id, "status": status})
 }
 
 func (s *server) failStaleOperations(ctx context.Context) error {
@@ -396,7 +404,7 @@ func (s *server) pauseForAgentApproval(ctx context.Context, id uuid.UUID) error 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	tag, err := tx.Exec(ctx, `UPDATE operations SET status='pending_approval',approved_by=NULL,approved_at=NULL,updated_at=now() WHERE id=$1 AND status='running'`)
+	tag, err := tx.Exec(ctx, `UPDATE operations SET status='pending_approval',approved_by=NULL,approved_at=NULL,updated_at=now() WHERE id=$1 AND status='running'`, id)
 	if err != nil || tag.RowsAffected() != 1 {
 		return errors.New("operation is no longer running")
 	}
@@ -810,7 +818,11 @@ func (s *server) runOperationStep(parent context.Context, client *ssh.Client, op
 		return err
 	}
 	_ = insertOperationEvent(parent, s.db, opID, "step.started", step.ID, map[string]any{"position": step.Position, "total": total, "description": step.Description})
-	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	timeout := 20 * time.Second
+	if policy == "autonomous_full_access" {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	session, err := client.NewSession()
 	if err != nil {
@@ -850,7 +862,7 @@ func (s *server) failRunningStep(id uuid.UUID, message string) {
 }
 
 func serializeOperationCommand(policy, executable string, args []string) (string, error) {
-	if policy == "unrestricted_approval" {
+	if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
 		if executable != "sh" || len(args) != 2 || args[0] != "-lc" || strings.TrimSpace(args[1]) == "" || len(args[1]) > 4000 || strings.ContainsRune(args[1], 0) {
 			return "", errors.New("invalid unrestricted command")
 		}

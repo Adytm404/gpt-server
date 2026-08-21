@@ -16,7 +16,7 @@ const lifecycleEventTypes = new Set(['planning', 'plan_ready', 'approved', 'appr
 
 const policies: Array<{ value: ChatPolicy; label: string; description: string }> = [
   { value: 'approval_required', label: 'Approval required', description: 'Read-only by default. Explicit install or change requests escalate to high-risk approval.' },
-  { value: 'unrestricted_approval', label: 'Full access', description: 'Arbitrary shell commands; every AI command batch requires explicit approval.' },
+  { value: 'autonomous_full_access', label: 'Full access', description: 'Autonomous arbitrary shell access until goal completes. No command approval prompts.' },
   { value: 'explain_only', label: 'Explain only', description: 'Analyze latest stored server context only. No commands will run.' },
 ]
 

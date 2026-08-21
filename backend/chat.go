@@ -531,9 +531,13 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		plan.Steps[i].Description = redactOperationalOutput(plan.Steps[i].Description)
 	}
 	assistantContent := plan.Summary
+	initialStatus := "pending_approval"
+	if effectivePolicy == "autonomous_full_access" {
+		initialStatus = "approved"
+	}
 	if err == nil {
 		var tag pgconn.CommandTag
-		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status='pending_approval',title=$2,summary=$3,risk=$4,updated_at=now() WHERE id=$1 AND workspace_id=$5 AND status='planning'`, opID, plan.Title, plan.Summary, plan.Risk, a.WorkspaceID)
+		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status=$2,title=$3,summary=$4,risk=$5,approved_by=CASE WHEN $2='approved' THEN created_by ELSE approved_by END,approved_at=CASE WHEN $2='approved' THEN now() ELSE approved_at END,updated_at=now() WHERE id=$1 AND workspace_id=$6 AND status='planning'`, opID, initialStatus, plan.Title, plan.Summary, plan.Risk, a.WorkspaceID)
 		if err == nil && tag.RowsAffected() != 1 {
 			err = errors.New("planning operation is no longer active")
 		}
@@ -554,6 +558,9 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = insertOperationEvent(r.Context(), tx, opID, "plan_ready", uuid.Nil, map[string]any{"steps": len(plan.Steps), "input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens})
 	}
+	if err == nil && initialStatus == "approved" {
+		err = insertOperationEvent(r.Context(), tx, opID, "approved", uuid.Nil, map[string]any{"mode": "autonomous_full_access"})
+	}
 	if err == nil {
 		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET updated_at=now() WHERE id=$1`, threadID)
 	}
@@ -569,6 +576,9 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cleanupConn()
+	if initialStatus == "approved" {
+		go s.runOperation(opID, a.WorkspaceID)
+	}
 	op, err := s.loadOperation(r.Context(), opID, a.WorkspaceID)
 	if err != nil {
 		s.dbError(w, r, err)
@@ -578,7 +588,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func validChatPolicy(policy string) bool {
-	return policy == "approval_required" || policy == "explain_only" || policy == "unrestricted_approval"
+	return policy == "approval_required" || policy == "explain_only" || policy == "unrestricted_approval" || policy == "autonomous_full_access"
 }
 
 func effectiveIntent(policy, routeIntent string) string {
@@ -595,6 +605,9 @@ func effectiveIntent(policy, routeIntent string) string {
 }
 
 func effectiveOperationPolicy(policy, routeIntent string) string {
+	if policy == "autonomous_full_access" {
+		return policy
+	}
 	if routeIntent == "server_mutation" && policy != "explain_only" {
 		return "unrestricted_approval"
 	}

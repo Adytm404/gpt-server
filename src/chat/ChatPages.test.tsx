@@ -67,7 +67,7 @@ describe('real chat workspace', () => {
     expect(within(options).getAllByRole('option')).toHaveLength(3)
     expect(within(options).getByText('Approval required')).toBeInTheDocument()
     expect(within(options).getByText('Full access')).toBeInTheDocument()
-    expect(within(options).getByText(/every AI command batch requires explicit approval/i)).toBeInTheDocument()
+    expect(within(options).getByText(/No command approval prompts/i)).toBeInTheDocument()
     expect(within(options).getByText('Explain only')).toBeInTheDocument()
     expect(screen.queryByText('Auto execute')).not.toBeInTheDocument()
     await userEvent.click(within(options).getByRole('option', { name: /Explain only/ }))

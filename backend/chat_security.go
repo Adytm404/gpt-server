@@ -60,7 +60,7 @@ func validateOperationPlan(plan operationPlan) error {
 }
 
 func validateOperationPlanForPolicy(plan operationPlan, policy string) error {
-	if strings.TrimSpace(plan.Title) == "" || len(plan.Title) > 200 || strings.TrimSpace(plan.Summary) == "" || len(plan.Summary) > 2000 || (plan.Risk != "low" && plan.Risk != "medium" && !(policy == "unrestricted_approval" && plan.Risk == "high")) || len(plan.Steps) == 0 || len(plan.Steps) > maxPlanSteps {
+	if strings.TrimSpace(plan.Title) == "" || len(plan.Title) > 200 || strings.TrimSpace(plan.Summary) == "" || len(plan.Summary) > 2000 || (plan.Risk != "low" && plan.Risk != "medium" && !((policy == "unrestricted_approval" || policy == "autonomous_full_access") && plan.Risk == "high")) || len(plan.Steps) == 0 || len(plan.Steps) > maxPlanSteps {
 		return errors.New("invalid operation plan")
 	}
 	for _, step := range plan.Steps {
@@ -75,7 +75,7 @@ func validateOperationPlanForPolicy(plan operationPlan, policy string) error {
 }
 
 func validateCommandForPolicy(policy, executable string, args []string) error {
-	if policy == "unrestricted_approval" {
+	if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
 		_, err := serializeOperationCommand(policy, executable, args)
 		return err
 	}
