@@ -180,7 +180,7 @@ function Topbar({ menu }: { menu: () => void }) {
           <span className="notification-dot" />
         </button>
         {notifOpen && (
-          <div className="tool-menu" style={{ position: 'absolute', right: 0, top: 'calc(100% + 8px)', width: 290, zIndex: 60, bottom: 'auto' }}>
+          <div className="tool-menu notif-menu" style={{ position: 'absolute', right: 0, left: 'auto', top: 'calc(100% + 8px)', bottom: 'auto', width: 'min(290px, calc(100vw - 32px))', zIndex: 120 }}>
             <header><span>Notifications</span><small>Live</small></header>
             <div style={{ padding: '12px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 11 }}>
