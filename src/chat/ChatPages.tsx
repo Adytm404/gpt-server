@@ -352,6 +352,11 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
   const [policyOpen, setPolicyOpen] = useState(false)
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const policyRoot = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    textareaRef.current?.focus()
+  }, [])
 
   useEffect(() => {
     if (compact) return
@@ -364,6 +369,22 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
   const setPolicy = (next: ChatPolicy) => {
     setPolicyState(next)
   }
+  useEffect(() => {
+    const focusComposer = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (event.key.length !== 1) return
+      const target = event.target as HTMLElement | null
+      if (target && (target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]') || target.isContentEditable)) return
+      if (document.querySelector('[role="dialog"]')) return
+      if (disabled || submitting) return
+      const area = textareaRef.current
+      if (!area || document.activeElement === area) return
+      area.focus()
+    }
+    document.addEventListener('keydown', focusComposer)
+    return () => document.removeEventListener('keydown', focusComposer)
+  }, [disabled, submitting])
+
   useEffect(() => { if (preset) setPrompt(preset) }, [preset])
   useEffect(() => {
     const close = (event: MouseEvent) => { if (!policyRoot.current?.contains(event.target as Node)) setPolicyOpen(false) }
@@ -382,7 +403,7 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
   const currentPlaceholder = compact ? 'Ask a follow-up...' : dynamicPlaceholders[placeholderIndex]
   const selectedPolicyObj = policies.find(item => item.value === policy)
   return <div className={cn('composer', compact && 'compact-composer')}>
-    <textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} placeholder={currentPlaceholder} aria-label="Ask OpsAI" rows={compact ? 1 : 3} disabled={disabled || submitting} />
+    <textarea ref={textareaRef} value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} placeholder={currentPlaceholder} aria-label="Ask OpsAI" rows={compact ? 1 : 3} disabled={disabled || submitting} />
     {error && <div className="auth-error composer-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
     <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<div className="composer-tool-popover" ref={policyRoot}><button type="button" className={cn('mode-button', !policy && 'placeholder', policyOpen && 'active')} onClick={() => setPolicyOpen(open => !open)} aria-label="Execution policy" aria-haspopup="listbox" aria-expanded={policyOpen}><ShieldCheck size={15} /> {selectedPolicyObj ? selectedPolicyObj.label : 'Select mode'} <ChevronDown size={13} /></button>{policyOpen && <div className="tool-menu policy-menu" role="listbox" aria-label="Execution policy options"><header><span>Execution policy</span><small>Required</small></header>{policies.map(item => <button type="button" role="option" aria-selected={item.value === policy} className={item.value === policy ? 'selected' : ''} key={item.value} onClick={() => { setPolicy(item.value); setPolicyOpen(false) }}><i><ShieldCheck size={15} /></i><span><b>{item.label}</b><small>{item.description}</small></span>{item.value === policy && <Check size={14} />}</button>)}</div>}</div></div>{busy && onCancel ? <button className="button danger-button" style={{ height: 32, padding: '0 12px', fontSize: 11 }} onClick={() => void onCancel()} aria-label="Stop operation"><Square size={11} fill="currentColor" /> Stop process</button> : <button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer || !policy} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button>}</div>
     {selectedPolicyObj && <p className="composer-policy-scope">{selectedPolicyObj.description}</p>}
