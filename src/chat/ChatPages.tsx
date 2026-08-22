@@ -1,4 +1,5 @@
-import { createContext, Fragment, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, Fragment, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Command, Download, MessageSquare, MoreHorizontal, Play, Plus, Server as ServerIcon, ShieldCheck, Sparkles, Square, Terminal } from 'lucide-react'
 import { chatApi, operationEventFromMessage, operationEventsUrl, reduceOperationEvents, type ChatConfig, type ChatMessage, type ChatPolicy, type ChatThread, type Operation, type OperationEvent } from '../api/chat'
@@ -70,17 +71,52 @@ export function RecentChats() {
   const navigate = useNavigate()
   const [menuThreadId, setMenuThreadId] = useState<string | null>(null)
   const [busyThreadId, setBusyThreadId] = useState<string | null>(null)
+  const [menuPosition, setMenuPosition] = useState<CSSProperties>({})
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (!menuThreadId) return
     const handleDown = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setMenuThreadId(null)
       }
     }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuThreadId(null)
+    }
     document.addEventListener('mousedown', handleDown)
-    return () => document.removeEventListener('mousedown', handleDown)
-  }, [])
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handleDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [menuThreadId])
+
+  useEffect(() => {
+    if (!menuThreadId) return
+    const reposition = () => setMenuPosition(position => ({ ...position }))
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
+  }, [menuThreadId])
+
+  const openMenu = (threadId: string, event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const estimatedHeight = 118
+    const openUpward = rect.bottom + estimatedHeight > window.innerHeight - 8
+    setMenuPosition({
+      position: 'fixed',
+      left: Math.min(rect.right + 4, window.innerWidth - 142),
+      top: openUpward ? undefined : rect.bottom + 4,
+      bottom: openUpward ? window.innerHeight - rect.top + 4 : undefined,
+    })
+    setMenuThreadId(current => current === threadId ? null : threadId)
+  }
 
   const handleRename = async (thread: ChatThread) => {
     setMenuThreadId(null)
@@ -132,8 +168,8 @@ export function RecentChats() {
     {!loading && error && <p className="chat-list-state" role="alert">{error}</p>}
     {!loading && !error && threads.length === 0 && <p className="chat-list-state">No recent chats</p>}
     {threads.map(thread => (
-      <div key={thread.id} className="history-link-container" ref={menuThreadId === thread.id ? menuRef : undefined}>
-        <NavLink to={`/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active')}>
+      <div key={thread.id} className="history-link-container">
+        <NavLink to={`/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active', menuThreadId === thread.id && 'menu-open')}>
           <MessageSquare size={14} />
           <span>
             <div className="history-link-header">
@@ -147,21 +183,19 @@ export function RecentChats() {
           type="button"
           className="history-menu-trigger"
           aria-label={`Actions for ${thread.title}`}
+          aria-expanded={menuThreadId === thread.id}
           disabled={busyThreadId === thread.id}
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            setMenuThreadId(current => current === thread.id ? null : thread.id)
-          }}
+          onClick={(e) => openMenu(thread.id, e)}
         >
           <MoreHorizontal size={13} />
         </button>
-        {menuThreadId === thread.id && (
-          <div className="history-dropdown-menu" role="menu">
+        {menuThreadId === thread.id && createPortal(
+          <div className="history-dropdown-menu" role="menu" ref={menuRef} style={menuPosition}>
             <button type="button" onClick={() => void handleRename(thread)}>Rename</button>
             <button type="button" onClick={() => void handleArchive(thread)}>Archive</button>
             <button type="button" className="danger" onClick={() => void handleDelete(thread)}>Delete</button>
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     ))}

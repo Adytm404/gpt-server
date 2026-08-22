@@ -32,10 +32,11 @@
 .history-link b { flex: 1 1 auto; min-width: 0; color: inherit; font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; }
 .history-link em { flex: 0 0 auto; color: #a4a4ab; font-style: normal; font-size: 9px; white-space: nowrap; font-weight: 500; }
 .history-link small { display: block; color: #888890; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.history-menu-trigger { position: absolute; right: 4px; bottom: 4px; width: 22px; height: 20px; border: 0; border-radius: 4px; background: transparent; color: #8c8c94; display: grid; place-items: center; cursor: pointer; opacity: 0; transition: opacity .15s, background .15s; z-index: 3; }
-.history-link-container:hover .history-menu-trigger { opacity: 1; }
+.history-menu-trigger { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 22px; height: 20px; border: 0; border-radius: 5px; background: transparent; color: #8c8c94; display: grid; place-items: center; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .15s, background .15s; z-index: 3; }
+.history-link-container:hover .history-menu-trigger, .history-link.menu-open .history-menu-trigger, .history-menu-trigger:focus-visible { opacity: 1; pointer-events: auto; }
 .history-menu-trigger:hover { background: #dcdcd8; color: var(--ink); }
-.history-dropdown-menu { position: absolute; right: 4px; top: calc(100% + 2px); width: 130px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: #fff; box-shadow: 0 10px 30px #17171b26; z-index: 50; animation: menu-in .12s ease; }
+.history-link-container:hover .history-link-header em, .history-link.menu-open .history-link-header em { opacity: 0; visibility: hidden; }
+.history-dropdown-menu { position: fixed; min-width: 132px; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: #fff; box-shadow: 0 12px 32px #17171b2b, 0 2px 8px #17171b14; z-index: 9999; animation: menu-in .12s ease; }
 @keyframes menu-in { from { opacity: 0; transform: translateY(-4px); } }
 .history-dropdown-menu button { width: 100%; border: 0; border-radius: 5px; padding: 7px 10px; background: transparent; text-align: left; font-size: 11px; cursor: pointer; display: block; font-weight: 500; }
 .history-dropdown-menu button:hover { background: var(--soft); }
