@@ -16,6 +16,7 @@ import {
   ListFilter,
   LockKeyhole,
   MemoryStick,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -30,6 +31,7 @@ import {
   type CreateServerDTO,
   type Server,
   type ServerSummaryDTO,
+  type UpdateServerDTO,
 } from "../api/servers";
 import { useDialog } from "../ui/DialogProvider";
 
@@ -120,6 +122,7 @@ export function ServersPage() {
   const [grid, setGrid] = useState(false);
   const [checkingAll, setCheckingAll] = useState(false);
   const [checkProgress, setCheckProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [editing, setEditing] = useState<Server | null>(null);
 
   const checkAllHealth = async () => {
     if (checkingAll || servers.length === 0) return;
@@ -309,7 +312,11 @@ export function ServersPage() {
             <span />
           </div>
           {filtered.map((server) => (
-            <ServerRow key={server.id} server={server} />
+            <ServerRow
+              key={server.id}
+              server={server}
+              onEdit={setEditing}
+            />
           ))}
         </div>
       )}
@@ -320,11 +327,24 @@ export function ServersPage() {
           saved={() => setShowAdd(false)}
         />
       )}
+      {editing && (
+        <EditServerModal
+          server={editing}
+          close={() => setEditing(null)}
+          saved={() => void load()}
+        />
+      )}
     </div>
   );
 }
 
-function ServerRow({ server }: { server: Server }) {
+function ServerRow({
+  server,
+  onEdit,
+}: {
+  server: Server;
+  onEdit: (server: Server) => void;
+}) {
   const navigate = useNavigate();
   const snapshot = server.latestSnapshot;
   return (
@@ -361,6 +381,198 @@ function ServerRow({ server }: { server: Server }) {
       <StatusPill status={server.status} />
       <ArrowRight size={17} />
     </button>
+  );
+}
+
+function EditServerModal({
+  server,
+  close,
+  saved,
+}: {
+  server: Server;
+  close: () => void;
+  saved: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState<UpdateServerDTO>({
+    name: server.name,
+    host: server.host,
+    port: server.port,
+    username: server.username,
+    auth_method: server.authMethod,
+    host_fingerprint: server.fingerprint || "",
+    environment: server.environment.toLowerCase(),
+    region: server.region === "-" ? "" : server.region,
+  });
+  const update = (patch: Partial<UpdateServerDTO>) =>
+    setForm((current) => ({ ...current, ...patch }));
+  const ready = Boolean(
+    form.name?.trim() &&
+      form.host?.trim() &&
+      form.username?.trim() &&
+      form.port &&
+      (!form.private_key || !form.password),
+  );
+  const submit = async () => {
+    setSaving(true);
+    setError("");
+    try {
+      await serversApi.update(server.id, form);
+      saved();
+      close();
+    } catch (caught) {
+      setError(message(caught));
+      setSaving(false);
+    }
+  };
+  return createPortal(
+    <div className="modal-layer">
+      <button className="modal-scrim" onClick={close} aria-label="Close" />
+      <div className="modal-card">
+        <div className="modal-header">
+          <div>
+            <span className="page-eyebrow">Server settings</span>
+            <h2>Edit server</h2>
+          </div>
+          <button
+            className="icon-button"
+            onClick={close}
+            aria-label="Close dialog"
+          >
+            <X size={19} />
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="form-grid">
+            <Field
+              label="Server name"
+              value={form.name || ""}
+              update={(name) => update({ name })}
+            />
+            <Field
+              label="Hostname or IP"
+              value={form.host || ""}
+              update={(host) => update({ host })}
+            />
+            <Field
+              label="SSH port"
+              value={String(form.port ?? "")}
+              update={(port) => update({ port: Number(port) })}
+            />
+            <label className="field">
+              <span>Environment</span>
+              <select
+                value={form.environment}
+                onChange={(e) => update({ environment: e.target.value })}
+              >
+                <option value="production">Production</option>
+                <option value="staging">Staging</option>
+                <option value="development">Development</option>
+              </select>
+            </label>
+            <Field
+              label="SSH username"
+              value={form.username || ""}
+              update={(username) => update({ username })}
+            />
+            <Field
+              label="Region / location (optional)"
+              value={form.region || ""}
+              update={(region) => update({ region })}
+            />
+            <Field
+              full
+              label="Host fingerprint (optional)"
+              value={form.host_fingerprint || ""}
+              update={(host_fingerprint) => update({ host_fingerprint })}
+            />
+            <div className="auth-method full">
+              <span className="auth-method-label">Authentication method</span>
+              <div
+                className="auth-tabs"
+                role="tablist"
+                aria-label="Authentication method"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={form.auth_method === "ssh_key"}
+                  onClick={() =>
+                    update({ auth_method: "ssh_key", password: undefined })
+                  }
+                >
+                  <KeyRound size={16} /> SSH key
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={form.auth_method === "password"}
+                  onClick={() =>
+                    update({ auth_method: "password", private_key: undefined })
+                  }
+                >
+                  <LockKeyhole size={16} /> Password
+                </button>
+              </div>
+            </div>
+            {form.auth_method === "ssh_key" ? (
+              <label className="field full" role="tabpanel">
+                <span>Replace private key</span>
+                <textarea
+                  rows={5}
+                  value={form.private_key || ""}
+                  onChange={(e) => update({ private_key: e.target.value })}
+                  placeholder="Leave empty to keep the stored key. Paste a new key to replace it."
+                />
+              </label>
+            ) : (
+              <label className="field full" role="tabpanel">
+                <span>Replace SSH password</span>
+                <span className="password-control">
+                  <input
+                    value={form.password || ""}
+                    onChange={(e) => update({ password: e.target.value })}
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Leave empty to keep the stored password."
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((value) => !value)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </button>
+                </span>
+              </label>
+            )}
+          </div>
+          <p className="edit-server-note">
+            Changing hostname, port, username, auth method, or credentials resets
+            server status to Unknown until the next health check.
+          </p>
+          {error && (
+            <div className="server-modal-error" role="alert">
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="modal-footer">
+          <button className="button secondary" onClick={close}>
+            Cancel
+          </button>
+          <button
+            className="button dark"
+            disabled={saving || !ready}
+            onClick={() => void submit()}
+          >
+            {saving ? "Saving..." : "Save changes"} <Check size={16} />
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -628,6 +840,7 @@ export function ServerDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [actionMessage, setActionMessage] = useState("");
   const [tab, setTab] = useState("Overview");
+  const [editing, setEditing] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     setLoadError("");
@@ -721,6 +934,12 @@ export function ServerDetailPage() {
           <div className="heading-actions">
             <button
               className="button secondary"
+              onClick={() => setEditing(true)}
+            >
+              <Pencil size={15} /> Edit
+            </button>
+            <button
+              className="button secondary"
               disabled={testing}
               onClick={() => void test()}
             >
@@ -779,6 +998,13 @@ export function ServerDetailPage() {
             <strong>{actionMessage}</strong>
           </div>
         </div>
+      )}
+      {editing && (
+        <EditServerModal
+          server={server}
+          close={() => setEditing(false)}
+          saved={() => void load()}
+        />
       )}
       <div className="detail-tabs">
         {["Overview", "Metrics", "Services", "SSH access"].map((item) => (

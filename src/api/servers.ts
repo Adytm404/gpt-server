@@ -32,6 +32,7 @@ export type ServerDTO = {
 
 export type ServerSummaryDTO = { total: number; online: number; offline: number; unknown: number }
 export type CreateServerDTO = { name: string; host: string; port: number; username: string; auth_method: 'ssh_key' | 'password'; password?: string; private_key?: string; host_fingerprint?: string; environment: string; region?: string }
+export type UpdateServerDTO = Partial<Omit<CreateServerDTO, 'password' | 'private_key'>> & { password?: string; private_key?: string }
 export type ConnectionTestResult = { ok: boolean; message: string; authMethod?: 'ssh_key' | 'password'; latencyMs?: number; hostFingerprint?: string }
 
 export function formatUptime(seconds: number): string {
@@ -77,6 +78,7 @@ export const serversApi = {
   async get(id: string) { return serverFromDTO(unwrapOne<ServerDTO>(await apiRequest(`/api/v1/servers/${encodeURIComponent(id)}`), 'server')) },
   async create(input: CreateServerDTO) { return serverFromDTO(unwrapOne<ServerDTO>(await apiRequest('/api/v1/servers', { method: 'POST', body: JSON.stringify(serverInput(input)) }), 'server')) },
   async testDraft(input: CreateServerDTO) { return connectionResult(await apiRequest('/api/v1/servers/test-draft', { method: 'POST', body: JSON.stringify(serverInput(input)) })) },
+  async update(id: string, input: UpdateServerDTO) { return serverFromDTO(unwrapOne<ServerDTO>(await apiRequest(`/api/v1/servers/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(serverInput({ username: '', ...input } as CreateServerDTO)) }), 'server')) },
   async testConnection(id: string) { return connectionResult(await apiRequest(`/api/v1/servers/${encodeURIComponent(id)}/test`, { method: 'POST' })) },
   async healthCheck(id: string) { await apiRequest(`/api/v1/servers/${encodeURIComponent(id)}/health-check`, { method: 'POST' }); return serversApi.get(id) },
   async remove(id: string) { return apiRequest<void>(`/api/v1/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
