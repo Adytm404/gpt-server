@@ -178,14 +178,113 @@ export function WorkspaceAIUsage({ admin }: { admin: boolean }) {
 
 function ServerPicker({ servers, value, onChange }: { servers: Server[]; value: string; onChange: (value: string) => void }) {
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const root = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const selected = servers.find(server => server.id === value)
+
   useEffect(() => {
-    const close = (event: MouseEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false) }
+    const close = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) {
+        setOpen(false)
+        setSearch('')
+      }
+    }
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [])
-  return <div className={cn('server-picker', open && 'open')} ref={root}><button className={cn('server-picker-trigger', !selected && 'placeholder')} type="button" onClick={() => setOpen(value => !value)} aria-haspopup="listbox" aria-expanded={open}><i className={cn('server-picker-icon', selected ? selected.status.toLowerCase() : 'offline')}><ServerIcon size={14} /></i><span><b>{selected ? selected.name : 'Select server'}</b><small>{selected ? selected.environment : 'Required for chat'}</small></span><ChevronDown size={13} /></button>{open && <div className="server-picker-menu" role="listbox"><header><span>Target server</span><small>{servers.filter(server => server.status === 'Online').length} online</small></header>{servers.map(server => <button type="button" role="option" aria-selected={server.id === value} disabled={server.status === 'Offline'} className={server.id === value ? 'selected' : ''} key={server.id} onClick={() => { onChange(server.id); setOpen(false) }}><i className={cn('server-option-icon', server.status.toLowerCase())}><ServerIcon size={14} /></i><span><b>{server.name}</b><small>{server.host} / {server.environment}</small></span><em><i />{server.status}</em>{server.id === value && <Check size={14} />}</button>)}<footer><ShieldCheck size={12} /> Commands run only on selected server</footer></div>}</div>
+
+  useEffect(() => {
+    if (open) {
+      setTimeout(() => searchInputRef.current?.focus(), 50)
+    } else {
+      setSearch('')
+    }
+  }, [open])
+
+  const filteredServers = servers.filter(server =>
+    `${server.name} ${server.host} ${server.environment}`.toLowerCase().includes(search.toLowerCase())
+  )
+
+  return (
+    <div className={cn('server-picker', open && 'open')} ref={root}>
+      <button
+        className={cn('server-picker-trigger', !selected && 'placeholder')}
+        type="button"
+        onClick={() => setOpen(value => !value)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <i className={cn('server-picker-icon', selected ? selected.status.toLowerCase() : 'offline')}>
+          <ServerIcon size={14} />
+        </i>
+        <span>
+          <b>{selected ? selected.name : 'Select server'}</b>
+          <small>{selected ? selected.environment : 'Required for chat'}</small>
+        </span>
+        <ChevronDown size={13} />
+      </button>
+
+      {open && (
+        <div className="server-picker-menu" role="listbox">
+          <header>
+            <span>Target server</span>
+            <small>{servers.filter(server => server.status === 'Online').length} online</small>
+          </header>
+
+          <div className="server-picker-search">
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search server name, IP, environment..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onClick={e => e.stopPropagation()}
+            />
+          </div>
+
+          <div className="server-picker-list">
+            {filteredServers.length === 0 ? (
+              <div className="server-picker-empty">No matching servers</div>
+            ) : (
+              filteredServers.map(server => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={server.id === value}
+                  disabled={server.status === 'Offline'}
+                  className={server.id === value ? 'selected' : ''}
+                  key={server.id}
+                  onClick={() => {
+                    onChange(server.id)
+                    setOpen(false)
+                    setSearch('')
+                  }}
+                >
+                  <i className={cn('server-option-icon', server.status.toLowerCase())}>
+                    <ServerIcon size={14} />
+                  </i>
+                  <span>
+                    <b>{server.name}</b>
+                    <small>{server.host} / {server.environment}</small>
+                  </span>
+                  <em>
+                    <i />
+                    {server.status}
+                  </em>
+                  {server.id === value && <Check size={14} />}
+                </button>
+              ))
+            )}
+          </div>
+
+          <footer>
+            <ShieldCheck size={12} /> Commands run only on selected server
+          </footer>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function getStoredPolicy(): ChatPolicy {
