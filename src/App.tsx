@@ -605,13 +605,28 @@ function ThreadPage() {
 }
 
 function ExecutionPanel({ active, logs, complete, server, stopped, onStop }: { active: boolean; logs: Array<{ type: string; text: string; time: string }>; complete: boolean; server: Server; stopped: boolean; onStop: () => void }) {
-  const terminalEnd = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<HTMLDivElement>(null)
+  const userScrolledUp = useRef(false)
   const [filter, setFilter] = useState<'session' | 'stderr'>('session')
   const [menu, setMenu] = useState(false)
-  useEffect(() => { terminalEnd.current?.scrollIntoView({ block: 'end' }) }, [logs.length])
+
+  const onScroll = () => {
+    if (!terminalRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = terminalRef.current
+    const atBottom = scrollHeight - scrollTop - clientHeight < 40
+    userScrolledUp.current = !atBottom
+  }
+
+  useEffect(() => {
+    if (!terminalRef.current) return
+    if (!userScrolledUp.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    }
+  }, [logs.length])
+
   const download = () => { const url = URL.createObjectURL(new Blob([logs.map(log => `${log.time} ${log.text}`).join('\n')], { type: 'text/plain' })); const link = document.createElement('a'); link.href = url; link.download = 'execution-log.txt'; link.click(); URL.revokeObjectURL(url); showToast('Execution log downloaded') }
   return <aside className="execution-panel"><div className="execution-head"><div><span className={cn('execution-state', active && !complete && 'running', complete && 'complete')}><i />{!active ? 'Waiting' : stopped ? 'Stopped' : complete ? 'Completed' : 'Live'}</span><h3>SSH terminal</h3></div><div><button className="icon-button" onClick={download} aria-label="Download log"><Download size={16} /></button><div className="terminal-menu"><button className="icon-button" onClick={() => setMenu(value=>!value)} aria-label="Terminal actions"><MoreHorizontal size={17} /></button>{menu && <div><button onClick={() => { navigator.clipboard?.writeText('sess_demo_7f92'); showToast('Session ID copied') }}>Copy session ID</button><button onClick={() => showToast('Line wrapping toggled')}>Wrap lines</button><button onClick={() => showToast('Terminal view cleared')}>Clear view</button></div>}</div></div></div><div className="execution-context"><span><ServerIcon size={14} /> deploy@{server.host}</span><span><Clock3 size={14} /> {complete ? '3.8s' : active ? 'connected' : 'not started'}</span></div>
-    {!active ? <div className="terminal-empty"><div><Terminal size={22} /></div><strong>Waiting for approval</strong><p>Live output will appear here after the execution plan is approved.</p></div> : <div className="terminal"><div className="terminal-toolbar"><span>SSH / PTY</span><div><button className={filter==='session'?'active':''} onClick={()=>setFilter('session')}>session</button><button className={filter==='stderr'?'active':''} onClick={()=>setFilter('stderr')}>stderr</button></div></div>{filter === 'stderr' ? <div className="terminal-filter-empty"><CheckCircle2 size={22}/><strong>No stderr output</strong><span>Session has not reported any errors.</span></div> : <div className="terminal-lines">{logs.map((log, index) => <div className={cn('log-line', log.type)} key={`${log.time}-${index}`}><span className="log-time">{log.time}</span><code>{log.text || ' '}</code>{!complete && index === logs.length - 1 && <i className="inline-cursor" />}</div>)}<div ref={terminalEnd} /></div>}</div>}
+    {!active ? <div className="terminal-empty"><div><Terminal size={22} /></div><strong>Waiting for approval</strong><p>Live output will appear here after the execution plan is approved.</p></div> : <div className="terminal" ref={terminalRef} onScroll={onScroll}><div className="terminal-toolbar"><span>SSH / PTY</span><div><button className={filter==='session'?'active':''} onClick={()=>setFilter('session')}>session</button><button className={filter==='stderr'?'active':''} onClick={()=>setFilter('stderr')}>stderr</button></div></div>{filter === 'stderr' ? <div className="terminal-filter-empty"><CheckCircle2 size={22}/><strong>No stderr output</strong><span>Session has not reported any errors.</span></div> : <div className="terminal-lines">{logs.map((log, index) => <div className={cn('log-line', log.type)} key={`${log.time}-${index}`}><span className="log-time">{log.time}</span><code>{log.text || ' '}</code>{!complete && index === logs.length - 1 && <i className="inline-cursor" />}</div>)}</div>}</div>}
     {active && <div className="execution-foot"><span>{stopped ? <><Square size={13}/> Stopped by user</> : complete ? <><CheckCircle2 size={15} /> Exit code 0</> : <><span className="tiny-spinner" /> Secure session active</>}</span>{!complete && <button onClick={onStop}><Square size={12} fill="currentColor" /> Stop</button>}</div>}
   </aside>
 }

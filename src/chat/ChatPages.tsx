@@ -411,13 +411,31 @@ function buildTimeline(messages: ChatMessage[], operations: Operation[], hiddenM
 
 function ExecutionPanel({ operation, events, connection, cancel, actionPending }: { operation: Operation; events: OperationEvent[]; connection: string; cancel: () => Promise<void>; actionPending: boolean }) {
   const [filter, setFilter] = useState<'session' | 'stderr'>('session')
+  const terminalRef = useRef<HTMLDivElement>(null)
+  const userScrolledUp = useRef(false)
   const output = filter === 'stderr' ? events.filter(event => event.type === 'stderr') : events.filter(event => ['stdout', 'stderr', 'command', 'system', 'message'].includes(event.type))
+
+  const onScroll = () => {
+    if (!terminalRef.current) return
+    const { scrollTop, scrollHeight, clientHeight } = terminalRef.current
+    // If user is near bottom (within 40px), keep auto-scroll active; otherwise pause auto-scroll
+    const atBottom = scrollHeight - scrollTop - clientHeight < 40
+    userScrolledUp.current = !atBottom
+  }
+
+  useEffect(() => {
+    if (!terminalRef.current) return
+    if (!userScrolledUp.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    }
+  }, [output.length])
+
   const download = () => {
     const value = events.map(event => `${event.createdAt || ''} [${event.type}] ${event.text}`).join('\n')
     const url = URL.createObjectURL(new Blob([value], { type: 'text/plain' })); const link = document.createElement('a'); link.href = url; link.download = `operation-${operation.id}.log`; link.click(); URL.revokeObjectURL(url)
   }
   return <aside className="execution-panel"><div className="execution-head"><div><span className={cn('execution-state', busyStatuses.has(operation.status) && 'running', finalStatuses.has(operation.status) && 'complete')}><i />{operation.status.replaceAll('_', ' ')}</span><h3>SSH terminal</h3></div><button className="icon-button" onClick={download} aria-label="Download log"><Download size={16} /></button></div><div className="execution-context"><span><ServerIcon size={14} /> {operation.serverName || operation.serverId || 'Server scope unavailable'}</span><span><Clock3 size={14} /> {connection}</span></div>
-    <div className="terminal"><div className="terminal-toolbar"><span>Operation event stream</span><div><button className={filter === 'session' ? 'active' : ''} onClick={() => setFilter('session')}>session</button><button className={filter === 'stderr' ? 'active' : ''} onClick={() => setFilter('stderr')}>stderr</button></div></div><div className="terminal-lines">{output.length === 0 ? <div className="terminal-filter-empty"><Terminal size={22} /><strong>No {filter === 'stderr' ? 'stderr ' : ''}output yet</strong><span>{connection === 'reconnecting' ? 'Reconnecting to event stream...' : 'Waiting for operation events.'}</span></div> : output.map((event, index) => <div className={cn('log-line', event.type)} key={event.id || index}><span className="log-time">{event.createdAt ? new Date(event.createdAt).toLocaleTimeString() : ''}</span><code>{event.text || ' '}</code></div>)}</div></div>
+    <div className="terminal" ref={terminalRef} onScroll={onScroll}><div className="terminal-toolbar"><span>Operation event stream</span><div><button className={filter === 'session' ? 'active' : ''} onClick={() => setFilter('session')}>session</button><button className={filter === 'stderr' ? 'active' : ''} onClick={() => setFilter('stderr')}>stderr</button></div></div><div className="terminal-lines">{output.length === 0 ? <div className="terminal-filter-empty"><Terminal size={22} /><strong>No {filter === 'stderr' ? 'stderr ' : ''}output yet</strong><span>{connection === 'reconnecting' ? 'Reconnecting to event stream...' : 'Waiting for operation events.'}</span></div> : output.map((event, index) => <div className={cn('log-line', event.type)} key={event.id || index}><span className="log-time">{event.createdAt ? new Date(event.createdAt).toLocaleTimeString() : ''}</span><code>{event.text || ' '}</code></div>)}</div></div>
     <div className="execution-foot"><span>{operation.exitCode != null ? <><CheckCircle2 size={15} /> Exit code {operation.exitCode}</> : connection === 'reconnecting' ? 'Reconnecting...' : connection}</span>{busyStatuses.has(operation.status) && <button disabled={actionPending} onClick={() => void cancel()}><Square size={12} fill="currentColor" /> Stop</button>}</div>
   </aside>
 }
