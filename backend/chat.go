@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -287,7 +288,52 @@ func (s *server) listChatMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT m.id,m.thread_id,m.role,m.kind,m.operation_id,m.reply_to_message_id,m.sequence,m.content,m.model_id,m.input_tokens,m.output_tokens,m.created_at FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id WHERE m.thread_id=$1 AND t.workspace_id=$2 ORDER BY m.sequence`, id, authFrom(r.Context()).WorkspaceID)
+	limitStr := r.URL.Query().Get("limit")
+	beforeSeqStr := r.URL.Query().Get("before_sequence")
+
+	var rows pgx.Rows
+	var err error
+	workspaceID := authFrom(r.Context()).WorkspaceID
+
+	if limitStr != "" {
+		limit := 30
+		fmt.Sscanf(limitStr, "%d", &limit)
+		if limit < 1 || limit > 100 {
+			limit = 30
+		}
+		if beforeSeqStr != "" {
+			var beforeSeq int64
+			fmt.Sscanf(beforeSeqStr, "%d", &beforeSeq)
+			// Fetch the latest N messages before sequence, ordered ascending for UI
+			query := `
+SELECT id, thread_id, role, kind, operation_id, reply_to_message_id, sequence, content, model_id, input_tokens, output_tokens, created_at
+FROM (
+    SELECT m.id,m.thread_id,m.role,m.kind,m.operation_id,m.reply_to_message_id,m.sequence,m.content,m.model_id,m.input_tokens,m.output_tokens,m.created_at
+    FROM chat_messages m
+    JOIN chat_threads t ON t.id=m.thread_id
+    WHERE m.thread_id=$1 AND t.workspace_id=$2 AND m.sequence < $3
+    ORDER BY m.sequence DESC
+    LIMIT $4
+) sub ORDER BY sequence ASC`
+			rows, err = s.db.Query(r.Context(), query, id, workspaceID, beforeSeq, limit)
+		} else {
+			// Fetch the latest N messages of the thread, ordered ascending for UI
+			query := `
+SELECT id, thread_id, role, kind, operation_id, reply_to_message_id, sequence, content, model_id, input_tokens, output_tokens, created_at
+FROM (
+    SELECT m.id,m.thread_id,m.role,m.kind,m.operation_id,m.reply_to_message_id,m.sequence,m.content,m.model_id,m.input_tokens,m.output_tokens,m.created_at
+    FROM chat_messages m
+    JOIN chat_threads t ON t.id=m.thread_id
+    WHERE m.thread_id=$1 AND t.workspace_id=$2
+    ORDER BY m.sequence DESC
+    LIMIT $3
+) sub ORDER BY sequence ASC`
+			rows, err = s.db.Query(r.Context(), query, id, workspaceID, limit)
+		}
+	} else {
+		rows, err = s.db.Query(r.Context(), `SELECT m.id,m.thread_id,m.role,m.kind,m.operation_id,m.reply_to_message_id,m.sequence,m.content,m.model_id,m.input_tokens,m.output_tokens,m.created_at FROM chat_messages m JOIN chat_threads t ON t.id=m.thread_id WHERE m.thread_id=$1 AND t.workspace_id=$2 ORDER BY m.sequence`, id, workspaceID)
+	}
+
 	if err != nil {
 		s.dbError(w, r, err)
 		return

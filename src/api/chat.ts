@@ -137,7 +137,13 @@ export const chatApi = {
   async getThread(id: string) { return threadFromDTO(unwrapOne(await apiRequest(`/api/v1/chat/threads/${encodeURIComponent(id)}`), 'thread')) },
   async updateThread(id: string, input: { title: string; status: 'active' | 'archived' }) { return threadFromDTO(unwrapOne(await apiRequest(`/api/v1/chat/threads/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }), 'thread')) },
   async deleteThread(id: string) { return apiRequest<void>(`/api/v1/chat/threads/${encodeURIComponent(id)}`, { method: 'DELETE' }) },
-  async listMessages(id: string) { return unwrapList<unknown>(await apiRequest(`/api/v1/chat/threads/${encodeURIComponent(id)}/messages`), 'messages').map(messageFromDTO) },
+  async listMessages(id: string, pagination?: { limit?: number; beforeSequence?: number }) {
+    const params = new URLSearchParams()
+    if (pagination?.limit) params.set('limit', String(pagination.limit))
+    if (pagination?.beforeSequence != null) params.set('before_sequence', String(pagination.beforeSequence))
+    const query = params.toString() ? `?${params.toString()}` : ''
+    return unwrapList<unknown>(await apiRequest(`/api/v1/chat/threads/${encodeURIComponent(id)}/messages${query}`), 'messages').map(messageFromDTO)
+  },
   async sendMessage(id: string, input: { content: string; policy: ChatPolicy }) {
     const body = await apiRequest<unknown>(`/api/v1/chat/threads/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ content: input.content, policy: input.policy }) })
     const dto = (body || {}) as AnyDTO

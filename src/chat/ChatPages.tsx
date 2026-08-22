@@ -474,6 +474,11 @@ export function ChatThreadPage() {
   const [pending, setPending] = useState<{ id: string; content: string; policy: ChatPolicy } | null>(null)
   const [actionPending, setActionPending] = useState(false)
   const [terminalMinimized, setTerminalMinimized] = useState(false)
+  const [hasMoreOlder, setHasMoreOlder] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const conversationRef = useRef<HTMLDivElement>(null)
+  const previousScrollHeight = useRef<number | null>(null)
+  const initialScrollDone = useRef(false)
   const mounted = useRef(true)
   const currentId = useRef(id)
   const loadGeneration = useRef(0)
@@ -482,19 +487,81 @@ export function ChatThreadPage() {
   const renderedItems = useRef('')
   currentId.current = id
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current
     const requestedId = id
     try {
-      const [nextThread, nextMessages, operations] = await Promise.all([chatApi.getThread(requestedId), chatApi.listMessages(requestedId), chatApi.listOperations({ threadId: requestedId })])
+      const [nextThread, nextMessages, operations] = await Promise.all([
+        chatApi.getThread(requestedId),
+        chatApi.listMessages(requestedId, { limit: 30 }),
+        chatApi.listOperations({ threadId: requestedId }),
+      ])
       if (!mounted.current || currentId.current !== requestedId || loadGeneration.current !== generation) return
-      setThread(nextThread); setMessages(nextMessages); setOperations(operations)
+      setThread(nextThread)
+      setMessages(nextMessages)
+      setHasMoreOlder(nextMessages.length >= 30)
+      setOperations(operations)
       setPending(current => current && nextMessages.some(message => message.role === 'user' && message.content === current.content) && operations.length ? null : current)
       setError('')
-    } catch (caught) { if (mounted.current && currentId.current === requestedId && loadGeneration.current === generation) setError(caught instanceof Error ? caught.message : 'Unable to load chat') }
-    finally { if (mounted.current && currentId.current === requestedId && loadGeneration.current === generation) setLoading(false) }
+    } catch (caught) {
+      if (mounted.current && currentId.current === requestedId && loadGeneration.current === generation) setError(caught instanceof Error ? caught.message : 'Unable to load chat')
+    } finally {
+      if (mounted.current && currentId.current === requestedId && loadGeneration.current === generation) setLoading(false)
+    }
   }, [id])
-  useEffect(() => { setLoading(true); void load() }, [load])
+
+  useEffect(() => {
+    setLoading(true)
+    setHasMoreOlder(true)
+    initialScrollDone.current = false
+    void load()
+  }, [load])
+
+  const loadOlderMessages = async () => {
+    if (loadingOlder || !hasMoreOlder || messages.length === 0 || !thread) return
+    const oldestMessage = messages[0]
+    if (oldestMessage?.sequence == null) return
+
+    setLoadingOlder(true)
+    if (conversationRef.current) {
+      previousScrollHeight.current = conversationRef.current.scrollHeight
+    }
+    try {
+      const older = await chatApi.listMessages(thread.id, {
+        limit: 30,
+        beforeSequence: oldestMessage.sequence,
+      })
+      if (!mounted.current || currentId.current !== thread.id) return
+      if (older.length < 30) {
+        setHasMoreOlder(false)
+      }
+      setMessages(current => {
+        const existingIds = new Set(current.map(m => m.id))
+        const newOnes = older.filter(m => !existingIds.has(m.id))
+        return [...newOnes, ...current]
+      })
+    } catch {
+      // Silently ignore or retry on next scroll
+    } finally {
+      if (mounted.current) setLoadingOlder(false)
+    }
+  }
+
+  const handleConversationScroll = () => {
+    if (!conversationRef.current) return
+    if (conversationRef.current.scrollTop <= 40 && hasMoreOlder && !loadingOlder) {
+      void loadOlderMessages()
+    }
+  }
+
+  useEffect(() => {
+    if (previousScrollHeight.current != null && conversationRef.current) {
+      const addedHeight = conversationRef.current.scrollHeight - previousScrollHeight.current
+      conversationRef.current.scrollTop += addedHeight
+      previousScrollHeight.current = null
+    }
+  }, [messages])
   const operation = operations.reduce<Operation | null>((latest, candidate) => {
     if (!latest) return candidate
     const latestTime = timestamp(latest.createdAt)
@@ -587,7 +654,9 @@ export function ChatThreadPage() {
   const renderStreamedSummary = () => <div className="message ai-message left-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI is explaining results...</span>}</div><MarkdownMessage streaming={summaryPhase === 'summarizing'}>{summaryText}</MarkdownMessage></div></div>
   return <div className={cn('thread-layout page-enter', terminalMinimized && 'terminal-minimized')}><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div>{operation && <button className="icon-button bordered" onClick={() => setTerminalMinimized(val => !val)} aria-label={terminalMinimized ? 'Show terminal' : 'Minimize terminal'} title={terminalMinimized ? 'Show terminal' : 'Minimize terminal'}><Terminal size={17} /></button>}</div>
     {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
-    <div className="conversation">{messages.length === 0 && operations.length === 0 && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{timeline.map(item => item.type === 'message' ? renderMessage(item.message) : <Fragment key={item.operation.id}><div className="message ai-message left-message operation-message" data-testid={`operation-${item.operation.id}`}><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={item.operation} summarizing={item.operation.id === operation?.id && summaryPhase === 'summarizing'} agentThinking={item.operation.id === operation?.id && agentThinking} actionPending={actionPending} mutate={item.operation.id === operation?.id ? mutate : undefined} /></div></div>{showStreamedSummary && item.operation.id === operation?.id && renderStreamedSummary()}</Fragment>)}
+    <div className="conversation" ref={conversationRef} onScroll={handleConversationScroll}>
+      {loadingOlder && <div style={{ textAlign: 'center', padding: '10px 0', fontSize: 11, color: 'var(--muted)' }}><span className="tiny-spinner" style={{ marginRight: 6 }} /> Loading earlier messages...</div>}
+      {messages.length === 0 && operations.length === 0 && !pending && <div className="chat-empty-state"><MessageSquare size={22} /><strong>No messages yet</strong></div>}{timeline.map(item => item.type === 'message' ? renderMessage(item.message) : <Fragment key={item.operation.id}><div className="message ai-message left-message operation-message" data-testid={`operation-${item.operation.id}`}><div className="message-avatar ai"><Command size={16} /></div><div className="message-content"><OperationCard operation={item.operation} summarizing={item.operation.id === operation?.id && summaryPhase === 'summarizing'} agentThinking={item.operation.id === operation?.id && agentThinking} actionPending={actionPending} mutate={item.operation.id === operation?.id ? mutate : undefined} /></div></div>{showStreamedSummary && item.operation.id === operation?.id && renderStreamedSummary()}</Fragment>)}
     {pending && <><div className="message user-message right-message" key={pending.id}><div className="message-avatar">YOU</div><div className="message-content"><div className="message-meta"><strong>You</strong><span>now</span></div><p>{pending.content}</p><span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span></div></div><div className="message ai-message left-message"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong><span className="tiny-spinner" /></div><p>{pending.policy === 'explain_only' ? 'OpsAI is analyzing server snapshot...' : 'OpsAI is processing request and determining steps...'}</p></div></div></>}
     <div ref={endRef} /></div>
     <div className="thread-composer"><Composer compact servers={[]} selectedServer={thread.serverId} onSubmit={followUp} disabled={busy || Boolean(pending)} disabledReason={busy ? `Follow-up unavailable while operation is ${operation?.status.replaceAll('_', ' ')}.` : ''} busy={busy} onCancel={operation && busyStatuses.has(operation.status) ? () => void mutate('cancel') : undefined} /></div></section>

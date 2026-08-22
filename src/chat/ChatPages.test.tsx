@@ -62,7 +62,7 @@ describe('real chat workspace', () => {
       if (url.endsWith('/chat/config')) return json({ configured: true, model_id: 'model-1', monthly_token_limit: 1000, used_tokens: 0 })
       if (url.endsWith('/servers')) return json({ servers: [server] })
       if (url.endsWith('/chat/threads') && init?.method === 'POST') return json({ thread }, 201)
-      if (url.endsWith('/messages') && init?.method === 'POST') { requests.push(body); return json({ message: { id: 'answer-1', role: 'assistant', content: 'Stored context is healthy.' } }, 201) }
+      if (url.includes('/messages') && init?.method === 'POST') { requests.push(body); return json({ message: { id: 'answer-1', role: 'assistant', content: 'Stored context is healthy.' } }, 201) }
       if (url.endsWith('/chat/threads')) return json({ threads: [] })
       throw new Error(`Unexpected request: ${url}`)
     })
@@ -89,8 +89,8 @@ describe('real chat workspace', () => {
     const pending = deferred<Response>()
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/messages') && init?.method === 'POST') return pending.promise
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages') && init?.method === 'POST') return pending.promise
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) return json({ operations: [] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -117,8 +117,8 @@ describe('real chat workspace', () => {
     let messageLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/messages') && init?.method === 'POST') return pending.promise
-      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: [] }) }
+      if (url.includes('/messages') && init?.method === 'POST') return pending.promise
+      if (url.includes('/messages')) { messageLists += 1; return json({ messages: [] }) }
       if (url.includes('/operations?')) return json({ operations: [] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -138,8 +138,8 @@ describe('real chat workspace', () => {
     const pending = deferred<Response>()
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/messages') && init?.method === 'POST') return pending.promise
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages') && init?.method === 'POST') return pending.promise
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) return json({ operations: [] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -156,7 +156,7 @@ describe('real chat workspace', () => {
   it('hides plan messages and renders operation before persisted result', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [
+      if (url.includes('/messages')) return json({ messages: [
         { id: 'm1', role: 'user', content: 'Inspect load', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
         { id: 'm2', role: 'assistant', content: 'Generic context', kind: 'chat', created_at: '2026-08-21T10:00:01Z' },
         { id: 'm3', role: 'assistant', content: 'Hidden plan summary', kind: 'plan', operation_id: operation.id, created_at: '2026-08-21T10:00:02Z' },
@@ -183,7 +183,7 @@ describe('real chat workspace', () => {
   it('orders same-timestamp replies by explicit sequence instead of response ID or API order', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [
+      if (url.includes('/messages')) return json({ messages: [
         { id: '000-assistant', role: 'assistant', content: 'Sequence answer', kind: 'chat', sequence: 12, reply_to_message_id: 'fff-user', created_at: '2026-08-21T10:00:00Z' },
         { id: 'fff-user', role: 'user', content: 'Sequence question', kind: 'chat', sequence: 11, created_at: '2026-08-21T10:00:00Z' },
       ] })
@@ -200,7 +200,7 @@ describe('real chat workspace', () => {
   it('places an ordinary linked reply directly after its user message', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [
+      if (url.includes('/messages')) return json({ messages: [
         { id: 'reply', role: 'assistant', content: 'Linked answer', kind: 'chat', reply_to_message_id: 'question', created_at: '2026-08-21T09:59:00Z' },
         { id: 'question', role: 'user', content: 'Linked question', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
         { id: 'later', role: 'user', content: 'Later question', kind: 'chat', created_at: '2026-08-21T10:01:00Z' },
@@ -218,7 +218,7 @@ describe('real chat workspace', () => {
   it('orders legacy same-timestamp user messages before assistant messages', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [
+      if (url.includes('/messages')) return json({ messages: [
         { id: '000-ai', role: 'assistant', content: 'Legacy answer', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
         { id: 'fff-user', role: 'user', content: 'Legacy question', kind: 'chat', created_at: '2026-08-21T10:00:00Z' },
       ] })
@@ -251,7 +251,7 @@ describe('real chat workspace', () => {
     }
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [
+      if (url.includes('/messages')) return json({ messages: [
         { id: 'user-1', role: 'user', content: 'Check disk', kind: 'chat', operation_id: older.id, created_at: '2026-08-21T10:00:00Z' },
         { id: 'plan-1', role: 'assistant', content: 'Hidden disk plan', kind: 'plan', operation_id: older.id, created_at: '2026-08-21T10:00:01Z' },
         { id: 'result-1', role: 'assistant', content: 'Disk is healthy', kind: 'result', operation_id: older.id, created_at: '2026-08-21T10:00:03Z' },
@@ -285,7 +285,7 @@ describe('real chat workspace', () => {
   ])('shows five operation stages for %s', async (status, states) => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [{ id: 'm1', role: 'user', content: 'Inspect load', kind: 'chat', operation_id: operation.id, created_at: '2026-08-21T10:00:00Z' }] })
+      if (url.includes('/messages')) return json({ messages: [{ id: 'm1', role: 'user', content: 'Inspect load', kind: 'chat', operation_id: operation.id, created_at: '2026-08-21T10:00:00Z' }] })
       if (url.includes('/operations?')) return json({ operations: [{ ...operation, status, created_at: '2026-08-21T10:00:01Z' }] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -301,8 +301,8 @@ describe('real chat workspace', () => {
     let messageLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/messages') && init?.method === 'POST') return json({ message: { id: 'answer-1', role: 'assistant', content: 'No commands were run.' } }, 201)
-      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: messageLists > 1 ? [{ id: 'answer-1', role: 'assistant', content: 'No commands were run.', kind: 'chat' }] : [] }) }
+      if (url.includes('/messages') && init?.method === 'POST') return json({ message: { id: 'answer-1', role: 'assistant', content: 'No commands were run.' } }, 201)
+      if (url.includes('/messages')) { messageLists += 1; return json({ messages: messageLists > 1 ? [{ id: 'answer-1', role: 'assistant', content: 'No commands were run.', kind: 'chat' }] : [] }) }
       if (url.includes('/operations?')) return json({ operations: [] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -338,7 +338,7 @@ describe('real chat workspace', () => {
   it('renders real messages, plan, and approval controls', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [{ id: 'm1', role: 'user', content: 'Inspect load' }, { id: 'm2', role: 'assistant', content: 'Review plan before execution.' }] })
+      if (url.includes('/messages')) return json({ messages: [{ id: 'm1', role: 'user', content: 'Inspect load' }, { id: 'm2', role: 'assistant', content: 'Review plan before execution.' }] })
       if (url.includes('/operations?')) return json({ operations: [operation] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       if (url.endsWith('/chat/threads/thread-1')) return json(thread)
@@ -384,7 +384,7 @@ describe('real chat workspace', () => {
     let operationLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) { operationLists += 1; return json({ operations: [operationLists > 1 ? { ...operation, status: 'running', steps: [{ ...operation.steps[0], status: 'running' }] } : operation] }) }
       if (url.endsWith('/approve') && init?.method === 'POST') return json({ id: operation.id, status: 'approved' }, 202)
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
@@ -406,7 +406,7 @@ describe('real chat workspace', () => {
     ] }
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) return json({ operations: [detailedOperation] })
       if (url.endsWith('/approve') && init?.method === 'POST') return json({ id: operation.id, status: 'approved' })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
@@ -428,7 +428,7 @@ describe('real chat workspace', () => {
   it('confirms chat deletion before calling API', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) return json({ operations: [] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -455,7 +455,7 @@ describe('real chat workspace', () => {
     let operationLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) {
         operationLists += 1
         const steps = operationLists > 1 ? [...operation.steps, { id: 'step-2', title: 'Inspect processes', status: 'pending', command: 'ps aux' }] : operation.steps
@@ -480,7 +480,7 @@ describe('real chat workspace', () => {
     const requests: string[] = []
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) return json({ operations: [failed] })
       if (url.endsWith('/retry') && init?.method === 'POST') { requests.push(url); return json({ id: failed.id, status: 'pending_approval' }) }
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
@@ -506,7 +506,7 @@ describe('real chat workspace', () => {
     let operationLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) { operationLists += 1; return json({ operations: [{ ...operation, status: 'running' }] }) }
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -541,7 +541,7 @@ describe('real chat workspace', () => {
     let messageLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) { messageLists += 1; return json({ messages: messageLists > 1 ? [{ id: 'summary-1', role: 'assistant', content: 'Host is healthy.' }] : [] }) }
+      if (url.includes('/messages')) { messageLists += 1; return json({ messages: messageLists > 1 ? [{ id: 'summary-1', role: 'assistant', content: 'Host is healthy.' }] : [] }) }
       if (url.includes('/operations?')) return json({ operations: [{ ...operation, status: 'succeeded', steps: [{ ...operation.steps[0], status: 'succeeded' }] }] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
@@ -569,7 +569,7 @@ describe('real chat workspace', () => {
   it('toggles terminal preview minimize in thread page', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) return json({ operations: [operation] })
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       if (url.endsWith('/chat/config')) return json({ configured: true, model_id: 'model-1', monthly_token_limit: 1000, used_tokens: 0 })
@@ -596,7 +596,7 @@ describe('real chat workspace', () => {
     let operationLists = 0
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const url = String(input)
-      if (url.endsWith('/messages')) return json({ messages: [] })
+      if (url.includes('/messages')) return json({ messages: [] })
       if (url.includes('/operations?')) { operationLists += 1; return json({ operations: [{ ...operation, status: operationLists > 1 ? 'succeeded' : 'running' }] }) }
       if (url.endsWith('/chat/threads')) return json({ threads: [thread] })
       return json(thread)
