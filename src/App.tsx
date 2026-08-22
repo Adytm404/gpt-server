@@ -545,7 +545,6 @@ function HomePage() {
   return <div className="home-page page-enter">
     <div className="ambient-grid" />
     <section className="hero">
-      <div className="eyebrow"><span className="live-dot" /> 3 servers online</div>
       <h1>What needs attention<br />across your <em>servers?</em></h1>
       <p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
       <Composer />

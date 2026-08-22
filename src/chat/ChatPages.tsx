@@ -202,13 +202,32 @@ function setStoredPolicy(policy: ChatPolicy) {
   } catch {}
 }
 
+const dynamicPlaceholders = [
+  'e.g. Check disk usage and largest directories',
+  'e.g. Inspect top memory and CPU consuming processes',
+  'e.g. Show active containers and recent restart status',
+  'e.g. Check nginx or systemd failed services and review logs',
+  'e.g. Run a comprehensive server health diagnostic',
+  'e.g. Install speedtest-cli and check download latency',
+]
+
 function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compact = false, disabled = false, disabledReason = '', preset = '', onCancel, busy = false }: { servers: Server[]; selectedServer: string; setSelectedServer?: (id: string) => void; onSubmit: (prompt: string, policy: ChatPolicy) => Promise<void>; compact?: boolean; disabled?: boolean; disabledReason?: string; preset?: string; onCancel?: () => void; busy?: boolean }) {
   const [prompt, setPrompt] = useState(preset)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [policy, setPolicyState] = useState<ChatPolicy>(getStoredPolicy)
   const [policyOpen, setPolicyOpen] = useState(false)
+  const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const policyRoot = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (compact) return
+    const interval = setInterval(() => {
+      setPlaceholderIndex(prev => (prev + 1) % dynamicPlaceholders.length)
+    }, 4500)
+    return () => clearInterval(interval)
+  }, [compact])
+
   const setPolicy = (next: ChatPolicy) => {
     setPolicyState(next)
     setStoredPolicy(next)
@@ -228,8 +247,9 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
     catch (caught) { setPrompt(submittedPrompt); setError(caught instanceof Error ? caught.message : 'Unable to send message') }
     finally { setSubmitting(false) }
   }
+  const currentPlaceholder = compact ? 'Ask a follow-up...' : dynamicPlaceholders[placeholderIndex]
   return <div className={cn('composer', compact && 'compact-composer')}>
-    <textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} placeholder={compact ? 'Ask a follow-up...' : 'Describe what you want to inspect...'} aria-label="Ask OpsAI" rows={compact ? 1 : 3} disabled={disabled || submitting} />
+    <textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} placeholder={currentPlaceholder} aria-label="Ask OpsAI" rows={compact ? 1 : 3} disabled={disabled || submitting} />
     {error && <div className="auth-error composer-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
     <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<div className="composer-tool-popover" ref={policyRoot}><button type="button" className={cn('mode-button', policyOpen && 'active')} onClick={() => setPolicyOpen(open => !open)} aria-label="Execution policy" aria-haspopup="listbox" aria-expanded={policyOpen}><ShieldCheck size={15} /> {policies.find(item => item.value === policy)?.label} <ChevronDown size={13} /></button>{policyOpen && <div className="tool-menu policy-menu" role="listbox" aria-label="Execution policy options"><header><span>Execution policy</span><small>For this message</small></header>{policies.map(item => <button type="button" role="option" aria-selected={item.value === policy} className={item.value === policy ? 'selected' : ''} key={item.value} onClick={() => { setPolicy(item.value); setPolicyOpen(false) }}><i><ShieldCheck size={15} /></i><span><b>{item.label}</b><small>{item.description}</small></span>{item.value === policy && <Check size={14} />}</button>)}</div>}</div></div>{busy && onCancel ? <button className="button danger-button" style={{ height: 32, padding: '0 12px', fontSize: 11 }} onClick={() => void onCancel()} aria-label="Stop operation"><Square size={11} fill="currentColor" /> Stop process</button> : <button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button>}</div>
     <p className="composer-policy-scope">{policies.find(item => item.value === policy)?.description}</p>
@@ -263,8 +283,7 @@ export function ChatHomePage() {
     navigate(`/chat/${created.id}`, { state: { prompt: content, policy } })
     void refresh()
   }
-  const online = servers.filter(server => server.status === 'Online').length
-  return <div className="home-page page-enter"><div className="ambient-grid" /><section className="hero"><div className="eyebrow"><span className="live-dot" /> {loading ? 'Loading server scope' : `${online} ${online === 1 ? 'server' : 'servers'} online`}</div><h1>What needs attention<br />across your <em>servers?</em></h1><p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
+  return <div className="home-page page-enter"><div className="ambient-grid" /><section className="hero"><h1>What needs attention<br />across your <em>servers?</em></h1><p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
     {(error || configError) && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error || configError}</div>}
     {!loading && !configLoading && !error && !configError && config?.configured === false ? <div className="chat-empty-state"><AlertTriangle size={24} /><strong>Workspace AI unavailable</strong><p>Workspace AI is not configured. Ask platform admin to assign an active model and token quota.</p></div> : !loading && !configLoading && !error && !configError && servers.length === 0 ? <><div className="chat-empty-state"><ServerIcon size={24} /><strong>No servers connected</strong><p>Connect a server before starting an operational chat.</p><NavLink className="button dark" to="/servers">Connect a server</NavLink></div><Composer servers={[]} selectedServer="" onSubmit={submit} disabled disabledReason="Connect a server to start a chat." /></> : config?.configured !== false && <Composer servers={servers} selectedServer={selected} setSelectedServer={setSelected} onSubmit={submit} preset={preset} disabled={loading || configLoading || Boolean(error || configError)} />}
     <div className="trust-line"><ShieldCheck size={14} /> Selected server defines operation scope. Every execution requires approval.</div></section>
