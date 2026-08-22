@@ -611,6 +611,7 @@ describe('real chat workspace', () => {
     })
     renderWithThreads(<Routes><Route path="/chat/:id" element={<ChatThreadPage />} /></Routes>, '/chat/thread-1')
     await screen.findByText('SSH terminal')
+    await waitFor(() => expect(EventSourceMock.instance).toBeDefined())
     EventSourceMock.instance.emit('stdout', { chunk: 'backend chunk' }, '20')
     expect(await screen.findByText('backend chunk')).toBeInTheDocument()
     EventSourceMock.instance.emit('completed', {}, '21')
