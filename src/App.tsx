@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Command, Copy, Cpu, Database, Download,
   Eye, EyeOff, FileCode2, Gauge, HardDrive, History, KeyRound, LayoutGrid, ListFilter, LockKeyhole, Mail, MemoryStick,
   FileClock, Layers3, LogOut, Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
-  Settings, ShieldCheck, Sparkles, Square, Terminal, UserRound, X, Zap,
+  Settings, ShieldCheck, Sparkles, Square, Terminal, UserRound, Users, X, Zap,
 } from 'lucide-react'
 import { servers, type Server } from './data'
 import AdminConsole from './admin/AdminConsole'
@@ -93,6 +93,104 @@ const primaryNav = [
   { to: '/executions', icon: Terminal, label: 'Executions' },
 ]
 
+function SidebarProfileMenu({
+  initials,
+  session,
+  loggingOut,
+  onLogout,
+  admin = false,
+  onNavigate,
+}: {
+  initials: string
+  session: ReturnType<typeof useSession>['session']
+  loggingOut: boolean
+  onLogout: () => void
+  admin?: boolean
+  onNavigate: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleDown = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleDown)
+    return () => document.removeEventListener('mousedown', handleDown)
+  }, [])
+
+  return (
+    <div className="sidebar-profile-container" ref={menuRef}>
+      <button
+        type="button"
+        className="profile-link"
+        aria-label="User menu"
+        aria-expanded={open}
+        onClick={() => setOpen(val => !val)}
+      >
+        <span className="avatar">{initials}</span>
+        <span>
+          <b>{session?.user.full_name || 'Account'}</b>
+          <small>{admin ? 'Platform administrator' : session?.workspace.role ? `Workspace ${session.workspace.role}` : session?.user.email}</small>
+        </span>
+        <ChevronRight size={14} className={cn('profile-arrow', open && 'open')} />
+      </button>
+
+      {open && (
+        <div className="profile-dropdown-menu" role="menu">
+          <div className="profile-dropdown-header">
+            <strong>{session?.user.full_name || 'Account'}</strong>
+            <small>{session?.user.email}</small>
+          </div>
+          <NavLink
+            to="/profile"
+            className="profile-dropdown-item"
+            onClick={() => {
+              setOpen(false)
+              onNavigate()
+            }}
+          >
+            <UserRound size={14} /> Profile settings
+          </NavLink>
+          <button
+            type="button"
+            className="profile-dropdown-item"
+            onClick={() => {
+              setOpen(false)
+              openDemo('help', 'Help & resources', 'Find guidance without leaving your workspace.')
+            }}
+          >
+            <CircleHelp size={14} /> Help & resources
+          </button>
+          <NavLink
+            to="/login"
+            className="profile-dropdown-item"
+            onClick={() => {
+              setOpen(false)
+              onNavigate()
+            }}
+          >
+            <Users size={14} /> Switch account
+          </NavLink>
+          <button
+            type="button"
+            className="profile-dropdown-item danger"
+            disabled={loggingOut}
+            onClick={() => {
+              setOpen(false)
+              onLogout()
+            }}
+          >
+            <LogOut size={14} /> {loggingOut ? 'Signing out...' : 'Sign out'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () => void; expanded: boolean; toggle: () => void }) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -126,8 +224,7 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       <div className="admin-sidebar-note"><ShieldCheck size={14} /><span><b>Platform scope</b><small>Changes affect every workspace.</small></span></div>
       <div className="sidebar-bottom">
         <NavLink to="/chat" className="nav-icon" onClick={close}><ArrowLeft size={18} /><span className="nav-label">Back to workspace</span><span className="tooltip">Back to workspace</span></NavLink>
-        <NavLink to="/profile" className="profile-link" aria-label="Profile"><span className="avatar">{initials}</span><span><b>{session?.user.full_name || 'Account'}</b><small>Platform administrator</small></span><ChevronRight size={14} /></NavLink>
-        <button className="nav-icon" onClick={logout} disabled={loggingOut}><LogOut size={18} /><span className="nav-label">{loggingOut ? 'Signing out...' : 'Sign out'}</span><span className="tooltip">Sign out</span></button>
+        <SidebarProfileMenu initials={initials} session={session} loggingOut={loggingOut} onLogout={logout} admin onNavigate={close} />
       </div>
     </aside>
     {open && <button className="sidebar-scrim" onClick={close} aria-label="Close menu" />}
@@ -140,12 +237,10 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       </nav>
       <RecentChats />
       <div className="sidebar-bottom">
-        <button className="nav-icon" onClick={() => openDemo('help', 'Help & resources', 'Find guidance without leaving your workspace.')}><CircleHelp size={18} /><span className="nav-label">Help</span><span className="tooltip">Help</span></button>
         <NavLink to="/settings" className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Settings size={18} /><span className="nav-label">Settings</span><span className="tooltip">Settings</span></NavLink>
         {session?.user.platform_role === 'admin' && <NavLink to="/admin/models" className={cn('nav-icon', 'admin-nav-link', location.pathname.startsWith('/admin') && 'active')}><ShieldCheck size={18} /><span className="nav-label">Platform admin</span><span className="tooltip">Platform admin</span></NavLink>}
         <WorkspaceAIUsage admin={session?.user.platform_role === 'admin'} />
-        <NavLink to="/profile" className="profile-link" aria-label="Profile"><span className="avatar">{initials}</span><span><b>{session?.user.full_name || 'Account'}</b><small>{session?.workspace.role ? `Workspace ${session.workspace.role}` : session?.user.email}</small></span><ChevronRight size={14} /></NavLink>
-        <button className="nav-icon" onClick={logout} disabled={loggingOut}><LogOut size={18} /><span className="nav-label">{loggingOut ? 'Signing out...' : 'Sign out'}</span><span className="tooltip">Sign out</span></button>
+        <SidebarProfileMenu initials={initials} session={session} loggingOut={loggingOut} onLogout={logout} onNavigate={close} />
       </div>
     </aside>
     {open && <button className="sidebar-scrim" onClick={close} aria-label="Close menu" />}
