@@ -220,6 +220,23 @@ describe('server pages', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true))
   })
 
+  it('triggers health check on all servers when check all health button is clicked', async () => {
+    let healthChecks = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/health-check') && init?.method === 'POST') {
+        healthChecks++
+        return new Response(JSON.stringify(server), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({ servers: [server, { ...server, id: 'srv-2', name: 'Worker Server' }], summary: { total: 2, online: 2, offline: 0, unknown: 0 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+    renderPage(<MemoryRouter><ServersPage /></MemoryRouter>)
+    expect(await screen.findByText('Production API')).toBeInTheDocument()
+    const checkAllBtn = screen.getByRole('button', { name: /Check all health/i })
+    await userEvent.click(checkAllBtn)
+    await waitFor(() => expect(healthChecks).toBe(2))
+  })
+
   it('keeps detail mounted after action HTTP failure', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => String(input).endsWith('/health-check')
       ? new Response(JSON.stringify({ error: 'health unavailable' }), { status: 503, headers: { 'Content-Type': 'application/json' } })

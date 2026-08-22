@@ -148,6 +148,7 @@
 .testing-overlay span { font-size: 9px; color: var(--muted); margin-top: 4px; }
 .spinner, .tiny-spinner { border-radius: 50%; border: 2px solid #dfd9ff; border-top-color: var(--accent); animation: orbit .7s linear infinite; }
 .spinner { width: 30px; height: 30px; }
+.spin-animation { animation: orbit .9s linear infinite; }
 
 .server-detail-page { padding-top: 30px; }
 .back-link { border: 0; background: transparent; font-size: 9px; color: var(--muted); display: flex; align-items: center; gap: 6px; padding: 4px 0; margin-bottom: 14px; cursor: pointer; }

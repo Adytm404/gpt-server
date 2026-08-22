@@ -17,6 +17,7 @@ import {
   LockKeyhole,
   MemoryStick,
   Plus,
+  RefreshCw,
   Search,
   Server as ServerIcon,
   ShieldCheck,
@@ -117,6 +118,38 @@ export function ServersPage() {
   const [filterOpen, setFilterOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState("All");
   const [grid, setGrid] = useState(false);
+  const [checkingAll, setCheckingAll] = useState(false);
+  const [checkProgress, setCheckProgress] = useState<{ completed: number; total: number } | null>(null);
+
+  const checkAllHealth = async () => {
+    if (checkingAll || servers.length === 0) return;
+    setCheckingAll(true);
+    setError("");
+    setCheckProgress({ completed: 0, total: servers.length });
+    try {
+      let done = 0;
+      await Promise.all(
+        servers.map(async (server) => {
+          try {
+            await serversApi.healthCheck(server.id);
+          } catch {
+            // Ignore single failure to allow all servers to complete
+          } finally {
+            done++;
+            setCheckProgress({ completed: done, total: servers.length });
+          }
+        })
+      );
+      const result = await serversApi.list();
+      setServers(result.servers);
+      setSummary(result.summary);
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setCheckingAll(false);
+      setCheckProgress(null);
+    }
+  };
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -162,9 +195,22 @@ export function ServersPage() {
           <h1>Servers</h1>
           <p>Connected machines, health signals, and access controls.</p>
         </div>
-        <button className="button dark" onClick={() => setShowAdd(true)}>
-          <Plus size={17} /> Add server
-        </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            className="button secondary"
+            disabled={checkingAll || loading || servers.length === 0}
+            onClick={() => void checkAllHealth()}
+            title="Run health check on all servers"
+          >
+            <RefreshCw size={15} className={cn(checkingAll && "spin-animation")} />
+            {checkingAll && checkProgress
+              ? `Checking (${checkProgress.completed}/${checkProgress.total})...`
+              : "Check all health"}
+          </button>
+          <button className="button dark" onClick={() => setShowAdd(true)}>
+            <Plus size={17} /> Add server
+          </button>
+        </div>
       </div>
       <div className="stats-strip">
         <MiniStat
