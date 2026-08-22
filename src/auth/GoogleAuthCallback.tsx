@@ -38,11 +38,7 @@ export function GoogleAuthCallback() {
   return (
     <div className="auth-page" style={{ justifyContent: 'center', alignItems: 'center' }}>
       <div className="auth-form-wrap" style={{ maxWidth: 420, textAlign: 'center', margin: 'auto' }}>
-        <div className="ai-orb" style={{ margin: '0 auto 20px' }}>
-          <div className="orb-core" />
-          <div className="orb-ring ring-one" />
-          <div className="orb-ring ring-two" />
-        </div>
+        <div className="tiny-spinner" style={{ width: 24, height: 24, margin: '0 auto 20px' }} />
         <h2>{error ? 'Authentication Failed' : 'Completing Sign-In'}</h2>
         <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 8 }}>
           {error ? error : 'Authenticating with Google and establishing secure workspace session...'}
