@@ -183,6 +183,16 @@ func requestOpenAIScopeDecision(ctx context.Context, client *http.Client, model 
 	return scopeDecision{}, totalUsage, lastErr
 }
 
+func extractJSONBlock(value string) string {
+	value = stripJSONFence(value)
+	start := strings.Index(value, "{")
+	end := strings.LastIndex(value, "}")
+	if start != -1 && end != -1 && end > start {
+		return value[start : end+1]
+	}
+	return value
+}
+
 func parseIntentResponse(raw []byte) (intentRoute, plannerUsage, error) {
 	var response openAITextResponse
 	if json.Unmarshal(raw, &response) != nil || len(response.Choices) == 0 {
@@ -192,9 +202,10 @@ func parseIntentResponse(raw []byte) (intentRoute, plannerUsage, error) {
 	if !validUsage(usage) {
 		return intentRoute{}, plannerUsage{}, errors.New("model provider returned invalid usage")
 	}
-	decoder := json.NewDecoder(strings.NewReader(stripJSONFence(response.Choices[0].Message.Content)))
-	decoder.DisallowUnknownFields()
+	cleaned := extractJSONBlock(response.Choices[0].Message.Content)
 	var route intentRoute
+	decoder := json.NewDecoder(strings.NewReader(cleaned))
+	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&route); err != nil {
 		return intentRoute{}, usage, errors.New("model provider returned invalid intent route JSON")
 	}
@@ -251,10 +262,9 @@ func parseScopeDecisionResponse(raw []byte) (scopeDecision, plannerUsage, error)
 	if !validUsage(usage) {
 		return scopeDecision{}, plannerUsage{}, errors.New("model provider returned invalid usage")
 	}
-	cleaned := stripJSONFence(response.Choices[0].Message.Content)
-	var decision scopeDecision
-	decoder := json.NewDecoder(strings.NewReader(cleaned))
+	decoder := json.NewDecoder(strings.NewReader(stripJSONFence(response.Choices[0].Message.Content)))
 	decoder.DisallowUnknownFields()
+	var decision scopeDecision
 	if err := decoder.Decode(&decision); err != nil {
 		return scopeDecision{}, usage, errors.New("model provider returned invalid scope decision JSON")
 	}
@@ -262,7 +272,7 @@ func parseScopeDecisionResponse(raw []byte) (scopeDecision, plannerUsage, error)
 		return scopeDecision{}, usage, errors.New("model provider returned multiple scope decisions")
 	}
 	validIntent := decision.VerifiedIntent == "conversation" || decision.VerifiedIntent == "server_explanation" || decision.VerifiedIntent == "server_operation" || decision.VerifiedIntent == "server_mutation" || decision.VerifiedIntent == "reject"
-	if (decision.Decision != "allow" && decision.Decision != "reject") || !validIntent || decision.Decision == "reject" && decision.VerifiedIntent != "reject" || decision.Decision == "allow" && decision.VerifiedIntent == "reject" || strings.TrimSpace(decision.Reason) == "" || len(decision.Reason) > 500 {
+	if (decision.Decision != "allow" && decision.Decision != "reject") || !validIntent || (decision.Decision == "reject" && decision.VerifiedIntent != "reject") || (decision.Decision == "allow" && decision.VerifiedIntent == "reject") || strings.TrimSpace(decision.Reason) == "" || len(decision.Reason) > 500 {
 		return scopeDecision{}, usage, errors.New("model provider returned invalid scope decision fields")
 	}
 	return decision, usage, nil
