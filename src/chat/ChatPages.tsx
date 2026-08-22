@@ -131,7 +131,40 @@ export function RecentChats() {
     {loading && <p className="chat-list-state">Loading chats...</p>}
     {!loading && error && <p className="chat-list-state" role="alert">{error}</p>}
     {!loading && !error && threads.length === 0 && <p className="chat-list-state">No recent chats</p>}
-    {threads.map(thread => <div key={thread.id} className="history-link-container" ref={menuThreadId === thread.id ? menuRef : undefined}><NavLink to={`/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active')}><MessageSquare size={13} /><span><b>{thread.title}</b><small>{thread.serverName || 'Server scope unavailable'}</small></span><em>{relativeTime(thread.updatedAt || thread.createdAt)}</em></NavLink><button type="button" className="history-menu-trigger" aria-label={`Actions for ${thread.title}`} disabled={busyThreadId === thread.id} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuThreadId(current => current === thread.id ? null : thread.id) }}><MoreHorizontal size={13} /></button>{menuThreadId === thread.id && <div className="history-dropdown-menu" role="menu"><button type="button" onClick={() => void handleRename(thread)}>Rename</button><button type="button" onClick={() => void handleArchive(thread)}>Archive</button><button type="button" className="danger" onClick={() => void handleDelete(thread)}>Delete</button></div>}</div>)}
+    {threads.map(thread => (
+      <div key={thread.id} className="history-link-container" ref={menuThreadId === thread.id ? menuRef : undefined}>
+        <NavLink to={`/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active')}>
+          <MessageSquare size={14} />
+          <span>
+            <div className="history-link-header">
+              <b>{thread.title}</b>
+              <em>{relativeTime(thread.updatedAt || thread.createdAt)}</em>
+            </div>
+            <small>{thread.serverName || 'Server scope unavailable'}</small>
+          </span>
+        </NavLink>
+        <button
+          type="button"
+          className="history-menu-trigger"
+          aria-label={`Actions for ${thread.title}`}
+          disabled={busyThreadId === thread.id}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            setMenuThreadId(current => current === thread.id ? null : thread.id)
+          }}
+        >
+          <MoreHorizontal size={13} />
+        </button>
+        {menuThreadId === thread.id && (
+          <div className="history-dropdown-menu" role="menu">
+            <button type="button" onClick={() => void handleRename(thread)}>Rename</button>
+            <button type="button" onClick={() => void handleArchive(thread)}>Archive</button>
+            <button type="button" className="danger" onClick={() => void handleDelete(thread)}>Delete</button>
+          </div>
+        )}
+      </div>
+    ))}
   </div>
 }
 
