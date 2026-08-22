@@ -126,6 +126,14 @@ func validateReadOnlyCommand(executable string, args []string) error {
 		if len(args) != 1 || (args[0] != "-a" && args[0] != "-r" && args[0] != "-m") {
 			return errors.New("uname arguments are not permitted")
 		}
+	case "ss":
+		if !oneOfArgSets(args, []string{"-tulpn"}, []string{"-tlpn"}, []string{"-tuln"}, []string{"-s"}) {
+			return errors.New("ss arguments are not permitted")
+		}
+	case "ip":
+		if !oneOfArgSets(args, []string{"-br", "a"}, []string{"addr"}, []string{"route"}) {
+			return errors.New("ip arguments are not permitted")
+		}
 	case "ps":
 		if !oneOfArgSets(args, []string{"-eo", "pid,comm,pcpu,pmem"}) {
 			return errors.New("ps arguments are not permitted")

@@ -443,6 +443,24 @@ func nextStepPositions(current, count int) []int {
 	return positions
 }
 
+func smartLogTruncate(value string, maxBytes int) string {
+	value = redactOperationalOutput(value)
+	if len(value) <= maxBytes {
+		return value
+	}
+	// Preserve head (first 20 lines) and tail (last 60 lines) where errors typically manifest
+	lines := strings.Split(value, "\n")
+	if len(lines) > 80 {
+		head := strings.Join(lines[:20], "\n")
+		tail := strings.Join(lines[len(lines)-60:], "\n")
+		combined := head + "\n... [truncated middle output] ...\n" + tail
+		if len(combined) <= maxBytes {
+			return combined
+		}
+	}
+	return boundedRedacted(value, maxBytes)
+}
+
 func (s *server) decideAgentContinuation(ctx context.Context, id, workspaceID uuid.UUID, round int, steps []operationStepResponse) (agentDecision, plannerUsage, error) {
 	if err := s.requireWorkspaceTokenQuota(ctx, workspaceID); err != nil {
 		return agentDecision{}, plannerUsage{}, err
@@ -474,7 +492,14 @@ func (s *server) decideAgentContinuation(ctx context.Context, id, workspaceID uu
 			if step.ExitCode != nil {
 				exitCode = *step.ExitCode
 			}
-			input.Steps = append(input.Steps, agentOperationEvidence{Description: boundedRedacted(step.Description, 1024), Executable: step.Executable, Args: step.Args, ExitCode: exitCode, Stdout: boundedRedacted(step.Stdout, 8192), Stderr: boundedRedacted(step.Stderr, 8192)})
+			input.Steps = append(input.Steps, agentOperationEvidence{
+				Description: boundedRedacted(step.Description, 1024),
+				Executable:  step.Executable,
+				Args:        step.Args,
+				ExitCode:    exitCode,
+				Stdout:      smartLogTruncate(step.Stdout, 8192),
+				Stderr:      smartLogTruncate(step.Stderr, 8192),
+			})
 		}
 	}
 	input.Request = boundedRedacted(input.Request, 4096)
