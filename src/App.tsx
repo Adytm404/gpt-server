@@ -152,7 +152,17 @@ function SidebarProfileMenu({
               onNavigate()
             }}
           >
-            <UserRound size={14} /> Profile settings
+            <UserRound size={14} /> Profile
+          </NavLink>
+          <NavLink
+            to="/settings"
+            className="profile-dropdown-item"
+            onClick={() => {
+              setOpen(false)
+              onNavigate()
+            }}
+          >
+            <Settings size={14} /> Workspace settings
           </NavLink>
           <button
             type="button"
@@ -237,7 +247,6 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       </nav>
       <RecentChats />
       <div className="sidebar-bottom">
-        <NavLink to="/settings" className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Settings size={18} /><span className="nav-label">Settings</span><span className="tooltip">Settings</span></NavLink>
         {session?.user.platform_role === 'admin' && <NavLink to="/admin/models" className={cn('nav-icon', 'admin-nav-link', location.pathname.startsWith('/admin') && 'active')}><ShieldCheck size={18} /><span className="nav-label">Platform admin</span><span className="tooltip">Platform admin</span></NavLink>}
         <WorkspaceAIUsage admin={session?.user.platform_role === 'admin'} />
         <SidebarProfileMenu initials={initials} session={session} loggingOut={loggingOut} onLogout={logout} onNavigate={close} />

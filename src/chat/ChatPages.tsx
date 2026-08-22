@@ -215,7 +215,7 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
   const [prompt, setPrompt] = useState(preset)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [policy, setPolicyState] = useState<ChatPolicy>(getStoredPolicy)
+  const [policy, setPolicyState] = useState<ChatPolicy | ''>('')
   const [policyOpen, setPolicyOpen] = useState(false)
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const policyRoot = useRef<HTMLDivElement>(null)
@@ -230,7 +230,6 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
 
   const setPolicy = (next: ChatPolicy) => {
     setPolicyState(next)
-    setStoredPolicy(next)
   }
   useEffect(() => { if (preset) setPrompt(preset) }, [preset])
   useEffect(() => {
@@ -240,7 +239,7 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
   }, [])
   const submit = async () => {
-    if (!prompt.trim() || disabled || submitting || !selectedServer) return
+    if (!prompt.trim() || disabled || submitting || !selectedServer || !policy) return
     const submittedPrompt = prompt.trim()
     setPrompt(''); setSubmitting(true); setError('')
     try { await onSubmit(submittedPrompt, policy) }
@@ -248,11 +247,13 @@ function Composer({ servers, selectedServer, setSelectedServer, onSubmit, compac
     finally { setSubmitting(false) }
   }
   const currentPlaceholder = compact ? 'Ask a follow-up...' : dynamicPlaceholders[placeholderIndex]
+  const selectedPolicyObj = policies.find(item => item.value === policy)
   return <div className={cn('composer', compact && 'compact-composer')}>
     <textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit() } }} placeholder={currentPlaceholder} aria-label="Ask OpsAI" rows={compact ? 1 : 3} disabled={disabled || submitting} />
     {error && <div className="auth-error composer-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
-    <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<div className="composer-tool-popover" ref={policyRoot}><button type="button" className={cn('mode-button', policyOpen && 'active')} onClick={() => setPolicyOpen(open => !open)} aria-label="Execution policy" aria-haspopup="listbox" aria-expanded={policyOpen}><ShieldCheck size={15} /> {policies.find(item => item.value === policy)?.label} <ChevronDown size={13} /></button>{policyOpen && <div className="tool-menu policy-menu" role="listbox" aria-label="Execution policy options"><header><span>Execution policy</span><small>For this message</small></header>{policies.map(item => <button type="button" role="option" aria-selected={item.value === policy} className={item.value === policy ? 'selected' : ''} key={item.value} onClick={() => { setPolicy(item.value); setPolicyOpen(false) }}><i><ShieldCheck size={15} /></i><span><b>{item.label}</b><small>{item.description}</small></span>{item.value === policy && <Check size={14} />}</button>)}</div>}</div></div>{busy && onCancel ? <button className="button danger-button" style={{ height: 32, padding: '0 12px', fontSize: 11 }} onClick={() => void onCancel()} aria-label="Stop operation"><Square size={11} fill="currentColor" /> Stop process</button> : <button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button>}</div>
-    <p className="composer-policy-scope">{policies.find(item => item.value === policy)?.description}</p>
+    <div className="composer-footer"><div className="composer-tools">{setSelectedServer && <ServerPicker servers={servers} value={selectedServer} onChange={setSelectedServer} />}<div className="composer-tool-popover" ref={policyRoot}><button type="button" className={cn('mode-button', !policy && 'placeholder', policyOpen && 'active')} onClick={() => setPolicyOpen(open => !open)} aria-label="Execution policy" aria-haspopup="listbox" aria-expanded={policyOpen}><ShieldCheck size={15} /> {selectedPolicyObj ? selectedPolicyObj.label : 'Select mode'} <ChevronDown size={13} /></button>{policyOpen && <div className="tool-menu policy-menu" role="listbox" aria-label="Execution policy options"><header><span>Execution policy</span><small>Required</small></header>{policies.map(item => <button type="button" role="option" aria-selected={item.value === policy} className={item.value === policy ? 'selected' : ''} key={item.value} onClick={() => { setPolicy(item.value); setPolicyOpen(false) }}><i><ShieldCheck size={15} /></i><span><b>{item.label}</b><small>{item.description}</small></span>{item.value === policy && <Check size={14} />}</button>)}</div>}</div></div>{busy && onCancel ? <button className="button danger-button" style={{ height: 32, padding: '0 12px', fontSize: 11 }} onClick={() => void onCancel()} aria-label="Stop operation"><Square size={11} fill="currentColor" /> Stop process</button> : <button className="send-button" onClick={() => void submit()} disabled={!prompt.trim() || disabled || submitting || !selectedServer || !policy} aria-label="Send">{submitting ? <span className="tiny-spinner" /> : <Sparkles size={17} />}</button>}</div>
+    {selectedPolicyObj && <p className="composer-policy-scope">{selectedPolicyObj.description}</p>}
+    {!selectedPolicyObj && !disabledReason && <p className="composer-policy-scope" style={{ color: '#9d9da4' }}>Select an execution mode (Approval required, Full access, or Explain only) to send.</p>}
     {disabledReason && <p className="composer-disabled-reason">{disabledReason}</p>}
   </div>
 }
