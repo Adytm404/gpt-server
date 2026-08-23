@@ -901,6 +901,9 @@ func TestChatAndOperationRoutesRequireAuthAndViewerCannotApprove(t *testing.T) {
 func TestEventBufferCapsOutput(t *testing.T) {
 	b := &eventBuffer{}
 	payload := make([]byte, maxOperationOutput+100)
+	for i := range payload {
+		payload[i] = 'x'
+	}
 	n, err := b.Write(payload)
 	if err != nil || n != len(payload) {
 		t.Fatalf("write n=%d err=%v", n, err)

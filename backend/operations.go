@@ -239,8 +239,13 @@ func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	// First, force any steps stuck in 'running' (from a crash/save failure) back to 'failed'
+	// so the retry logic below can find and reset them.
+	_, err = tx.Exec(r.Context(), `UPDATE operation_steps SET status='failed',exit_code=-1,stderr=CASE WHEN stderr='' THEN 'interrupted' ELSE stderr END,finished_at=COALESCE(finished_at,now()),updated_at=now() WHERE operation_id=$1 AND status='running'`, id)
 	var pending int
-	err = tx.QueryRow(r.Context(), `SELECT count(*) FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='pending'`, id, a.WorkspaceID).Scan(&pending)
+	if err == nil {
+		err = tx.QueryRow(r.Context(), `SELECT count(*) FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='pending'`, id, a.WorkspaceID).Scan(&pending)
+	}
 	if err == nil && pending == 0 {
 		_, err = tx.Exec(r.Context(), `UPDATE operation_steps SET status='pending',exit_code=NULL,stdout='',stderr='',started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=(SELECT s.id FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='failed' ORDER BY s.position DESC LIMIT 1)`, id, a.WorkspaceID)
 	}
@@ -275,6 +280,11 @@ func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) failStaleOperations(ctx context.Context) error {
 	_, err := s.db.Exec(ctx, `WITH stale AS (UPDATE operations SET status='failed',error='server restarted before operation completed',finished_at=now(),updated_at=now() WHERE status IN ('planning','approved','running','summarizing') RETURNING id) INSERT INTO operation_events(operation_id,event_type,payload) SELECT id,'failed','{"error":"server restarted"}'::jsonb FROM stale`)
+	if err != nil {
+		return err
+	}
+	// Also fix any steps stuck in 'running' from a previous crash.
+	_, err = s.db.Exec(ctx, `UPDATE operation_steps SET status='failed',exit_code=-1,stderr=CASE WHEN stderr='' THEN 'interrupted by server restart' ELSE stderr END,finished_at=COALESCE(finished_at,now()),updated_at=now() WHERE status='running'`)
 	return err
 }
 
@@ -875,10 +885,15 @@ func (s *server) runOperationStep(parent context.Context, client *ssh.Client, op
 		}
 	}
 	status := operationStepFinalStatus(parent.Err(), err)
-	_, dbErr := s.db.Exec(context.Background(), `UPDATE operation_steps SET status=$2,exit_code=$3,stdout=$4,stderr=$5,finished_at=now(),updated_at=now() WHERE id=$1 AND status='running'`, step.ID, status, exitCode, stdout.String(), stderr.String())
+	stdoutStr, stderrStr := stdout.String(), stderr.String()
+	_, dbErr := s.db.Exec(context.Background(), `UPDATE operation_steps SET status=$2,exit_code=$3,stdout=$4,stderr=$5,finished_at=now(),updated_at=now() WHERE id=$1 AND status='running'`, step.ID, status, exitCode, stdoutStr, stderrStr)
 	if dbErr != nil {
-		s.failRunningStep(step.ID, "step result could not be stored")
-		return dbErr
+		log.Printf("step %s save failed (full output): %v", step.ID, dbErr)
+		// Retry with empty output so the step transitions out of 'running'.
+		_, dbErr = s.db.Exec(context.Background(), `UPDATE operation_steps SET status=$2,exit_code=$3,stdout='(output could not be stored)',stderr=$4,finished_at=now(),updated_at=now() WHERE id=$1 AND status='running'`, step.ID, status, exitCode, fmt.Sprintf("save error: %s", dbErr.Error()))
+		if dbErr != nil {
+			log.Printf("step %s save failed (fallback): %v", step.ID, dbErr)
+		}
 	}
 	_ = insertOperationEvent(context.Background(), s.db, opID, "step.completed", step.ID, map[string]any{"position": step.Position, "total": total, "status": status, "exit_code": exitCode, "output_truncated": stdout.Truncated() || stderr.Truncated()})
 	return err
@@ -1023,7 +1038,7 @@ func (b *eventBuffer) emitLocked(chunk []byte) bool {
 	if len(chunk) == 0 || b.s == nil || b.s.db == nil {
 		return true
 	}
-	safe := redactOperationalOutput(strings.ToValidUTF8(string(chunk), ""))
+	safe := sanitizeSSHOutput(string(chunk))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return insertOperationEvent(ctx, b.s.db, b.opID, b.event, b.stepID, map[string]any{"chunk": safe}) == nil
@@ -1031,7 +1046,13 @@ func (b *eventBuffer) emitLocked(chunk []byte) bool {
 func (b *eventBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return redactOperationalOutput(strings.ToValidUTF8(b.buf.String(), ""))
+	return sanitizeSSHOutput(b.buf.String())
+}
+
+// sanitizeSSHOutput strips null bytes (rejected by PostgreSQL text columns), replaces
+// invalid UTF-8 sequences, and redacts secrets from raw SSH output.
+func sanitizeSSHOutput(value string) string {
+	return redactOperationalOutput(strings.ToValidUTF8(strings.ReplaceAll(value, "\x00", ""), ""))
 }
 func (b *eventBuffer) Truncated() bool { b.mu.Lock(); defer b.mu.Unlock(); return b.truncated }
 func (s *server) markStepCancelled(ctx context.Context, id uuid.UUID) {
