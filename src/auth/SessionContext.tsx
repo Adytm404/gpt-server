@@ -69,3 +69,7 @@ export function useSession() {
   if (!value) throw new Error('useSession must be used within SessionProvider')
   return value
 }
+
+export function useOptionalSession() {
+  return useContext(SessionContext)
+}

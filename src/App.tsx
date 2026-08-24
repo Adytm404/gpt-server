@@ -279,7 +279,7 @@ function Topbar({ menu }: { menu: () => void }) {
   }, [])
 
   const adminMode = location.pathname.startsWith('/admin')
-  const section = location.pathname.startsWith('/admin') ? 'Platform admin' : location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
+  const section = location.pathname.startsWith('/admin') ? 'Platform admin' : location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/pricing') ? 'Pricing & Plans' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
   return <header className="topbar">
     <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button>{adminMode ? <span className="workspace-picker admin-context"><ShieldCheck size={14} /> Platform control</span> : <span className="workspace-picker workspace-context"><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'}</span>}<span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
     <div className="topbar-actions" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -316,6 +316,7 @@ function AppShell() {
     <Route path="/servers" element={<ApiServersPage />} />
     <Route path="/servers/:id" element={<ApiServerDetailPage />} />
     <Route path="/executions" element={<ApiExecutionsPage />} />
+    <Route path="/pricing" element={<ApiPricingPage mode="dashboard" />} />
     <Route path="/settings" element={<SettingsPage />} />
     <Route path="/profile" element={<ProfilePage />} />
     <Route path="/forbidden" element={<ForbiddenPage />} />

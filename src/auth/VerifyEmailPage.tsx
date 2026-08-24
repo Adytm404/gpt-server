@@ -98,15 +98,25 @@ export default function VerifyEmailPage() {
               <span className="page-eyebrow" style={{ color: "var(--green)" }}>Activated</span>
               <h1 style={{ fontSize: 32, margin: "8px 0 10px" }}>Email Verified!</h1>
               <p style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6, marginBottom: 24 }}>
-                Your account is activated and ready. You can now sign in to inspect servers, run live SSH commands, and manage operations.
+                Your account is confirmed! Choose your workspace plan to activate AI root-cause analysis, live terminal streaming, and connected server capacity.
               </p>
-              <button
-                className="button dark auth-submit"
-                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-                onClick={() => navigate("/login")}
-              >
-                Sign In to OpsAI <ArrowRight size={14} />
-              </button>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <button
+                  className="button dark auth-submit"
+                  style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                  onClick={() => navigate("/pricing?mode=onboarding")}
+                >
+                  Select Plan &amp; Get Started <ArrowRight size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  style={{ width: "100%" }}
+                  onClick={() => navigate("/login")}
+                >
+                  Sign In Directly
+                </button>
+              </div>
             </>
           ) : (
             <>
