@@ -462,24 +462,80 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
       <div className="auth-page">
         <NavLink to="/" className="auth-brand"><BrandMark /><span>OpsAI</span></NavLink>
         <main className="auth-form-panel">
-          <div className="auth-form-wrap" style={{ textAlign: 'center' }}>
-            <div style={{ width: 48, height: 48, borderRadius: '50%', background: '#f0edff', color: 'var(--accent)', display: 'grid', placeItems: 'center', margin: '0 auto 16px' }}>
-              <Mail size={24} />
+          <div className="auth-form-wrap">
+            <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: 12, background: 'var(--accent-soft)', color: 'var(--accent)', marginBottom: 18, border: '1px solid #7657ff20' }}>
+              <Mail size={22} />
             </div>
             <span className="page-eyebrow">Verification required</span>
-            <h1>Check your email.</h1>
-            <p>We have sent an activation link to <b>{email}</b>. Please click the link to verify your account and activate your workspace.</p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 24 }}>
-              <NavLink to="/login" className="button dark" style={{ width: '100%' }}>
+            <h1 style={{ fontSize: 32, margin: '8px 0 10px' }}>Check your email.</h1>
+            <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>
+              We have sent a secure activation link to <b>{email}</b>. Click the link in the email to activate your workspace and begin operating.
+            </p>
+
+            <div style={{ padding: '14px 16px', background: '#fff', border: '1px solid var(--line)', borderRadius: 10, marginBottom: 20, fontSize: 12, display: 'flex', flexDirection: 'column', gap: 6, textAlign: 'left' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--ink)', fontWeight: 600 }}>
+                <Clock3 size={14} color="var(--accent)" /> Link expires in 24 hours
+              </div>
+              <span style={{ color: 'var(--muted)', fontSize: 11 }}>If you don't see the email, check your spam or junk folder.</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <NavLink to="/login" className="button dark auth-submit" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
                 Go to Sign In <ArrowRight size={14} />
               </NavLink>
-              <button type="button" className="button secondary" onClick={() => void adminApi.resendVerification(email).then(() => setResendMessage('Verification link resent!')).catch(e => setResendMessage(e.message))}>
-                Resend verification email
+              <button
+                type="button"
+                className="button secondary"
+                disabled={resending}
+                onClick={() => void handleResend()}
+                style={{ minHeight: 40, fontSize: 12 }}
+              >
+                {resending ? 'Sending...' : 'Resend verification email'}
               </button>
-              {resendMessage && <span style={{ fontSize: 11, color: 'var(--accent)' }}>{resendMessage}</span>}
+              {resendMessage && (
+                <div style={{ padding: '8px 12px', borderRadius: 8, background: '#f0fff4', color: 'var(--green)', fontSize: 11, border: '1px solid #c6f6d5', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                  <CheckCircle2 size={13} /> {resendMessage}
+                </div>
+              )}
             </div>
+
+            <p className="auth-switch" style={{ marginTop: 24 }}>
+              Wrong email address? <NavLink to="/register">Create another account</NavLink>
+            </p>
+            <div className="auth-trust"><ShieldCheck size={12} /> Encrypted session / Verification-gated security</div>
           </div>
         </main>
+        <aside className="auth-visual">
+          <div className="auth-grid" />
+          <div className="auth-visual-copy">
+            <span>PLATFORM SECURITY / EMAIL VERIFICATION</span>
+            <h2>Verify identity.<br />Protect infrastructure.</h2>
+            <p>Every workspace account requires cryptographic email confirmation before SSH keys, terminal commands, or server agents can be initialized.</p>
+          </div>
+          <div className="auth-operation">
+            <header>
+              <span><i /> ACTIVATION STATUS</span>
+              <b>SECURITY GATEWAY</b>
+            </header>
+            <div>
+              <i><Check size={12} /></i>
+              <span><b>Workspace registered</b><small>{workspace || 'New workspace'} initialized</small></span>
+            </div>
+            <div className="running">
+              <i><span /></i>
+              <span><b>Awaiting email confirmation</b><small>Single-use 256-bit activation token sent</small></span>
+            </div>
+            <div>
+              <i style={{ background: '#26262b', color: '#666' }}><ShieldCheck size={12} /></i>
+              <span><b>SSH & AI Control Plane locked</b><small>Unlocks immediately upon verification</small></span>
+            </div>
+            <footer><ShieldCheck size={11} /> ZERO-TRUST IDENTITY VALIDATION</footer>
+          </div>
+          <div className="auth-visual-foot">
+            <span>SESSION ENCRYPTED</span>
+            <span>OPS / 2026</span>
+          </div>
+        </aside>
       </div>
     )
   }

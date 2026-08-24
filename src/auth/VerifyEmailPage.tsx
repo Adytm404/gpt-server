@@ -1,8 +1,18 @@
 import { useEffect, useState } from "react";
 import { useSearchParams, NavLink, useNavigate } from "react-router-dom";
-import { CheckCircle2, AlertTriangle, Mail, ArrowRight, RefreshCw } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Mail, ArrowRight, ShieldCheck, Check } from "lucide-react";
 import { adminApi } from "../api/admin";
 import "../styles/marketing.css";
+
+function BrandMark() {
+  return (
+    <div className="brand-mark" style={{ width: 28, height: 28, borderRadius: 8, background: "#17171b", display: "grid", placeItems: "center" }}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+      </svg>
+    </div>
+  );
+}
 
 export default function VerifyEmailPage() {
   const [searchParams] = useSearchParams();
@@ -11,7 +21,7 @@ export default function VerifyEmailPage() {
 
   const [loading, setLoading] = useState(Boolean(token));
   const [success, setSuccess] = useState(false);
-  const [error, setError] = useState(token ? "" : "No verification token provided");
+  const [error, setError] = useState(token ? "" : "No verification token provided in the URL.");
 
   const [resendEmail, setResendEmail] = useState("");
   const [resending, setResending] = useState(false);
@@ -23,7 +33,7 @@ export default function VerifyEmailPage() {
     setError("");
     adminApi
       .verifyEmail(token)
-      .then((res) => {
+      .then(() => {
         setSuccess(true);
       })
       .catch((caught) => {
@@ -50,56 +60,151 @@ export default function VerifyEmailPage() {
   };
 
   return (
-    <div className="auth-page" style={{ height: "100vh", display: "grid", placeItems: "center", overflow: "hidden" }}>
-      <div className="auth-form-wrap" style={{ maxWidth: 440, padding: "32px 24px", background: "#fff", border: "1px solid var(--line)", borderRadius: 16, textAlign: "center", boxShadow: "0 10px 30px #00000008" }}>
-        <div style={{ width: 48, height: 48, borderRadius: "50%", background: success ? "#f0fff4" : error ? "#fff5f5" : "#f0edff", color: success ? "var(--green)" : error ? "var(--red)" : "var(--accent)", display: "grid", placeItems: "center", margin: "0 auto 16px" }}>
-          {success ? <CheckCircle2 size={26} /> : error ? <AlertTriangle size={26} /> : <Mail size={26} />}
-        </div>
+    <div className="auth-page">
+      <NavLink to="/" className="auth-brand">
+        <BrandMark />
+        <span>OpsAI</span>
+      </NavLink>
 
-        {loading ? (
-          <>
-            <h2 style={{ margin: "0 0 8px", fontSize: 22 }}>Verifying your email...</h2>
-            <p style={{ color: "var(--muted)", fontSize: 12, margin: 0 }}>Please wait while we validate your activation token.</p>
-          </>
-        ) : success ? (
-          <>
-            <h2 style={{ margin: "0 0 8px", fontSize: 22, color: "#17171b" }}>Email Verified!</h2>
-            <p style={{ color: "var(--muted)", fontSize: 13, margin: "0 0 24px" }}>
-              Your workspace account is now active and ready for secure operations.
-            </p>
-            <button className="button dark" style={{ width: "100%" }} onClick={() => navigate("/login")}>
-              Sign In to OpsAI <ArrowRight size={14} />
-            </button>
-          </>
-        ) : (
-          <>
-            <h2 style={{ margin: "0 0 8px", fontSize: 22, color: "#17171b" }}>Verification Failed</h2>
-            <p style={{ color: "var(--red)", fontSize: 12, margin: "0 0 20px" }}>{error}</p>
+      <main className="auth-form-panel">
+        <div className="auth-form-wrap">
+          <div
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 44,
+              height: 44,
+              borderRadius: 12,
+              background: success ? "#f0fff4" : error ? "#fff5f5" : "var(--accent-soft)",
+              color: success ? "var(--green)" : error ? "var(--red)" : "var(--accent)",
+              marginBottom: 18,
+              border: `1px solid ${success ? "#c6f6d5" : error ? "#fed7d7" : "#7657ff20"}`,
+            }}
+          >
+            {success ? <CheckCircle2 size={24} /> : error ? <AlertTriangle size={24} /> : <Mail size={24} />}
+          </div>
 
-            <form onSubmit={handleResend} style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
-              <span style={{ fontSize: 11, fontWeight: 600, color: "#17171b" }}>Request a new verification link</span>
-              <input
-                type="email"
-                required
-                placeholder="Enter your registered email"
-                value={resendEmail}
-                onChange={(e) => setResendEmail(e.target.value)}
-                style={{ width: "100%", height: 38, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px", fontSize: 12 }}
-              />
-              <button type="submit" className="button dark" disabled={resending} style={{ width: "100%", height: 38 }}>
-                {resending ? "Sending..." : "Resend Link"}
+          {loading ? (
+            <>
+              <span className="page-eyebrow">Security validation</span>
+              <h1 style={{ fontSize: 32, margin: "8px 0 10px" }}>Verifying email...</h1>
+              <p style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6, marginBottom: 20 }}>
+                Please wait while we validate your activation token against the platform cryptographic store.
+              </p>
+            </>
+          ) : success ? (
+            <>
+              <span className="page-eyebrow" style={{ color: "var(--green)" }}>Activated</span>
+              <h1 style={{ fontSize: 32, margin: "8px 0 10px" }}>Email Verified!</h1>
+              <p style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.6, marginBottom: 24 }}>
+                Your account is activated and ready. You can now sign in to inspect servers, run live SSH commands, and manage operations.
+              </p>
+              <button
+                className="button dark auth-submit"
+                style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                onClick={() => navigate("/login")}
+              >
+                Sign In to OpsAI <ArrowRight size={14} />
               </button>
-              {resendStatus && <p style={{ fontSize: 11, color: "var(--muted)", margin: "6px 0 0" }}>{resendStatus}</p>}
-            </form>
+            </>
+          ) : (
+            <>
+              <span className="page-eyebrow" style={{ color: "var(--red)" }}>Verification error</span>
+              <h1 style={{ fontSize: 32, margin: "8px 0 10px" }}>Activation failed</h1>
+              <div
+                style={{
+                  padding: "12px 14px",
+                  background: "#fff5f5",
+                  border: "1px solid #fed7d7",
+                  borderRadius: 10,
+                  color: "#9b2c2c",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  marginBottom: 20,
+                }}
+              >
+                {error}
+              </div>
 
-            <div style={{ marginTop: 20, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
-              <NavLink to="/login" style={{ fontSize: 12, color: "var(--accent)", fontWeight: 600 }}>
-                Back to Sign In
-              </NavLink>
-            </div>
-          </>
-        )}
-      </div>
+              <form onSubmit={handleResend} style={{ display: "flex", flexDirection: "column", gap: 10, textAlign: "left" }}>
+                <label className="auth-field">
+                  <span>Registered email address</span>
+                  <div>
+                    <Mail size={15} />
+                    <input
+                      type="email"
+                      required
+                      placeholder="you@company.com"
+                      value={resendEmail}
+                      onChange={(e) => setResendEmail(e.target.value)}
+                    />
+                  </div>
+                </label>
+                <button type="submit" className="button dark" disabled={resending} style={{ minHeight: 40, marginTop: 4 }}>
+                  {resending ? "Sending link..." : "Send new activation link"}
+                </button>
+                {resendStatus && (
+                  <div
+                    style={{
+                      padding: "8px 12px",
+                      borderRadius: 8,
+                      background: "#f0fff4",
+                      color: "var(--green)",
+                      fontSize: 11,
+                      border: "1px solid #c6f6d5",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <CheckCircle2 size={13} /> {resendStatus}
+                  </div>
+                )}
+              </form>
+
+              <p className="auth-switch" style={{ marginTop: 24 }}>
+                <NavLink to="/login">Back to Sign In</NavLink>
+              </p>
+            </>
+          )}
+          <div className="auth-trust" style={{ marginTop: 28 }}>
+            <ShieldCheck size={12} /> Encrypted session / Approval-first operations
+          </div>
+        </div>
+      </main>
+
+      <aside className="auth-visual">
+        <div className="auth-grid" />
+        <div className="auth-visual-copy">
+          <span>PLATFORM SECURITY / ACTIVATION</span>
+          <h2>Operate with context.<br />Execute with confidence.</h2>
+          <p>One secure workspace for every server, investigation, approval, and live verified terminal output.</p>
+        </div>
+        <div className="auth-operation">
+          <header>
+            <span><i /> ACTIVATION STATUS</span>
+            <b>{success ? "VERIFIED" : "IDENTITY GATEWAY"}</b>
+          </header>
+          <div>
+            <i><Check size={12} /></i>
+            <span><b>Workspace identity</b><small>Cryptographic token verified</small></span>
+          </div>
+          <div>
+            <i><Check size={12} /></i>
+            <span><b>SSH Engine ready</b><small>Bounded read-only & safe mutation agents</small></span>
+          </div>
+          <div className={success ? "" : "running"}>
+            <i>{success ? <Check size={12} /> : <span />}</i>
+            <span><b>{success ? "Control plane unlocked" : "Verifying credentials"}</b><small>Multi-server live execution dashboard</small></span>
+          </div>
+          <footer><ShieldCheck size={11} /> HUMAN APPROVAL REMAINS IN THE LOOP</footer>
+        </div>
+        <div className="auth-visual-foot">
+          <span>SESSION ENCRYPTED</span>
+          <span>OPS / 2026</span>
+        </div>
+      </aside>
     </div>
   );
 }

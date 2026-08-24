@@ -13,8 +13,8 @@ describe('VerifyEmailPage', () => {
         </Routes>
       </MemoryRouter>
     )
-    expect(screen.getByText('Verification Failed')).toBeInTheDocument()
-    expect(screen.getByText('No verification token provided')).toBeInTheDocument()
+    expect(screen.getByText('Activation failed')).toBeInTheDocument()
+    expect(screen.getByText('No verification token provided in the URL.')).toBeInTheDocument()
   })
 
   it('renders success when verification succeeds', async () => {
@@ -26,7 +26,7 @@ describe('VerifyEmailPage', () => {
         </Routes>
       </MemoryRouter>
     )
-    expect(screen.getByText('Verifying your email...')).toBeInTheDocument()
+    expect(screen.getByText('Verifying email...')).toBeInTheDocument()
     await waitFor(() => {
       expect(screen.getByText('Email Verified!')).toBeInTheDocument()
     })
@@ -42,9 +42,9 @@ describe('VerifyEmailPage', () => {
       </MemoryRouter>
     )
     await waitFor(() => {
-      expect(screen.getByText('Verification Failed')).toBeInTheDocument()
+      expect(screen.getByText('Activation failed')).toBeInTheDocument()
       expect(screen.getByText('Invalid token')).toBeInTheDocument()
     })
-    expect(screen.getByText('Request a new verification link')).toBeInTheDocument()
+    expect(screen.getByText('Registered email address')).toBeInTheDocument()
   })
 })
