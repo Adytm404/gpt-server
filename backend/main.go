@@ -15,6 +15,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +42,7 @@ const (
 
 type config struct {
 	addr, frontendOrigin                               string
+	allowedOrigins                                     []string
 	dbHost, dbPort, dbUser, dbName, dbPassword, dbSSL  string
 	serverKeyEncryptionKey                             string
 	modelKeyEncryptionKey                              string
@@ -164,6 +166,7 @@ func loadConfig() (config, error) {
 		serverKeyEncryptionKey: os.Getenv("SERVER_KEY_ENCRYPTION_KEY"),
 		modelKeyEncryptionKey:  os.Getenv("MODEL_KEY_ENCRYPTION_KEY"),
 	}
+	cfg.allowedOrigins = append([]string{cfg.frontendOrigin}, splitOrigins(os.Getenv("APP_ALLOWED_ORIGINS"))...)
 	var err error
 	cfg.sessionTTL, err = time.ParseDuration(env("SESSION_TTL", "720h"))
 	if err != nil || cfg.sessionTTL <= 0 {
@@ -194,7 +197,35 @@ func loadConfig() (config, error) {
 	if err != nil || origin.Scheme == "" || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.User != nil {
 		return config{}, errors.New("APP_FRONTEND_ORIGIN must be an origin without a path")
 	}
+	for _, allowedOrigin := range cfg.allowedOrigins[1:] {
+		parsed, parseErr := url.Parse(allowedOrigin)
+		if parseErr != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+			return config{}, errors.New("APP_ALLOWED_ORIGINS must contain origins without paths")
+		}
+	}
 	return cfg, nil
+}
+
+func splitOrigins(value string) []string {
+	var origins []string
+	for _, item := range strings.Split(value, ",") {
+		origin := strings.TrimRight(strings.TrimSpace(item), "/")
+		if origin != "" && !slices.Contains(origins, origin) {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
+}
+
+func (s *server) originAllowed(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	allowed := s.cfg.allowedOrigins
+	if len(allowed) == 0 {
+		allowed = []string{s.cfg.frontendOrigin}
+	}
+	return slices.Contains(allowed, origin)
 }
 
 func env(key, fallback string) string {
@@ -277,7 +308,7 @@ func (s *server) secureHeaders(next http.Handler) http.Handler {
 func (s *server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == s.cfg.frontendOrigin {
+		if s.originAllowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token")
@@ -285,7 +316,7 @@ func (s *server) cors(next http.Handler) http.Handler {
 			w.Header().Add("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {
-			if origin != s.cfg.frontendOrigin {
+			if !s.originAllowed(origin) {
 				s.writeError(w, r, http.StatusForbidden, "origin not allowed")
 				return
 			}
@@ -305,7 +336,7 @@ func (s *server) limitBody(next http.Handler) http.Handler {
 
 func (s *server) requireOrigin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") != s.cfg.frontendOrigin {
+		if !s.originAllowed(r.Header.Get("Origin")) {
 			s.writeError(w, r, http.StatusForbidden, "origin not allowed")
 			return
 		}

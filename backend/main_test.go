@@ -99,6 +99,19 @@ func TestOriginAndLiveFlow(t *testing.T) {
 	}
 }
 
+func TestAllowedTunnelOrigin(t *testing.T) {
+	s := &server{cfg: config{
+		frontendOrigin: "http://localhost:5173",
+		allowedOrigins: []string{"http://localhost:5173", "https://local.webkulo.com"},
+	}}
+	if !s.originAllowed("https://local.webkulo.com") {
+		t.Fatal("configured tunnel origin rejected")
+	}
+	if s.originAllowed("https://untrusted.example.com") {
+		t.Fatal("unconfigured origin accepted")
+	}
+}
+
 func TestLogoutRejectsMissingCSRF(t *testing.T) {
 	s := &server{cfg: config{frontendOrigin: "https://app.example.com"}}
 	recorder := httptest.NewRecorder()

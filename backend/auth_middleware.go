@@ -68,7 +68,7 @@ func (s *server) requireAdmin(next http.Handler) http.Handler {
 
 func (s *server) requireMutation(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") != s.cfg.frontendOrigin {
+		if !s.originAllowed(r.Header.Get("Origin")) {
 			s.writeError(w, r, http.StatusForbidden, "origin not allowed")
 			return
 		}
