@@ -3,8 +3,10 @@ package main
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 type workspaceSettingsResponse struct {
@@ -68,6 +70,8 @@ type changePasswordInput struct {
 func (s *server) settingsRoutes(r chi.Router) {
 	r.Get("/workspace", s.getWorkspaceSettings)
 	r.With(s.requireMutation).Patch("/workspace", s.requireWorkspaceAction("settings", s.updateWorkspaceSettings))
+	r.Get("/subscription", s.getWorkspaceSubscription)
+	r.With(s.requireMutation).Post("/subscription/cancel", s.requireWorkspaceAction("settings", s.cancelWorkspaceSubscription))
 	r.Get("/profile", s.getUserProfile)
 	r.With(s.requireMutation).Patch("/profile", s.updateUserProfile)
 	r.With(s.requireMutation).Post("/change-password", s.changePassword)
@@ -273,4 +277,97 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "password updated"})
+}
+
+type workspaceSubscriptionResponse struct {
+	PlanID           *uuid.UUID `json:"plan_id,omitempty"`
+	PlanRevisionID   *uuid.UUID `json:"plan_revision_id,omitempty"`
+	PlanName         string     `json:"plan_name"`
+	Slug             string     `json:"slug"`
+	PriceCents       int        `json:"price_cents"`
+	AnnualPriceCents int        `json:"annual_price_cents"`
+	MaxServers       int        `json:"max_servers"`
+	MonthlyTokens    int64      `json:"monthly_tokens"`
+	UsedTokens       int64      `json:"used_tokens"`
+	ExpiresAt        *string    `json:"expires_at,omitempty"`
+	HasActivePlan    bool       `json:"has_active_plan"`
+	Role             string     `json:"role"`
+}
+
+func (s *server) getWorkspaceSubscription(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	var out workspaceSubscriptionResponse
+	out.Role = auth.WorkspaceRole
+
+	var expiresAt *time.Time
+	err := s.db.QueryRow(r.Context(), `
+SELECT p.plan_id, p.id, p.name, p.slug, p.price_cents, p.annual_price_cents, p.max_servers,
+       COALESCE(ws.monthly_token_limit, p.monthly_tokens, 0),
+       ws.expires_at,
+       COALESCE((SELECT sum(total_tokens) FROM token_usage WHERE workspace_id = $1 AND period_start = date_trunc('month', now())::date), 0)
+FROM workspace_subscriptions ws
+JOIN subscription_plan_revisions p ON p.id = ws.plan_revision_id
+WHERE ws.workspace_id = $1`, auth.WorkspaceID).Scan(
+		&out.PlanID, &out.PlanRevisionID, &out.PlanName, &out.Slug, &out.PriceCents, &out.AnnualPriceCents,
+		&out.MaxServers, &out.MonthlyTokens, &expiresAt, &out.UsedTokens,
+	)
+
+	if err != nil {
+		// If no active paid plan revision
+		var defaultLimit int64
+		_ = s.db.QueryRow(r.Context(), `
+SELECT COALESCE(ws.monthly_token_limit, 0),
+       COALESCE((SELECT sum(total_tokens) FROM token_usage WHERE workspace_id = $1 AND period_start = date_trunc('month', now())::date), 0)
+FROM workspace_subscriptions ws
+WHERE ws.workspace_id = $1`, auth.WorkspaceID).Scan(&defaultLimit, &out.UsedTokens)
+
+		out.PlanName = "Free / Starter"
+		out.Slug = "free"
+		out.MonthlyTokens = defaultLimit
+		out.MaxServers = 3
+		out.HasActivePlan = false
+		s.writeJSON(w, http.StatusOK, out)
+		return
+	}
+
+	out.HasActivePlan = true
+	if expiresAt != nil {
+		expStr := expiresAt.Format(time.RFC3339)
+		out.ExpiresAt = &expStr
+	}
+
+	s.writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) cancelWorkspaceSubscription(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	if auth.WorkspaceRole != "owner" {
+		s.writeError(w, r, http.StatusForbidden, "only workspace owners can cancel subscriptions")
+		return
+	}
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	_, err = tx.Exec(r.Context(), `
+UPDATE workspace_subscriptions
+SET plan_revision_id = NULL, expires_at = NULL, updated_at = now()
+WHERE workspace_id = $1`, auth.WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	_ = insertAudit(r.Context(), tx, auth.UserID, "billing", "Cancelled workspace subscription plan", auth.WorkspaceID, "subscription", nil)
+
+	if err = tx.Commit(r.Context()); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Subscription plan cancelled successfully"})
 }

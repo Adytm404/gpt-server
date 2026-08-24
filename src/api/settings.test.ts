@@ -28,4 +28,14 @@ describe('settingsApi', () => {
 
     fetchMock.mockRestore()
   })
+
+  it('fetches and cancels workspace subscription', async () => {
+    const subDTO = { plan_name: 'Pro', slug: 'pro', price_cents: 50000, annual_price_cents: 40000, max_servers: 10, monthly_tokens: 500000, used_tokens: 12000, has_active_plan: true, role: 'owner' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify(subDTO), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, message: 'Cancelled' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(settingsApi.getWorkspaceSubscription()).resolves.toEqual(subDTO)
+    await expect(settingsApi.cancelWorkspaceSubscription()).resolves.toEqual({ success: true, message: 'Cancelled' })
+  })
 })

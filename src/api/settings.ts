@@ -53,7 +53,30 @@ export type UpdateUserProfileDTO = {
   command_output_density?: string
 }
 
+export type WorkspaceSubscriptionDTO = {
+  plan_id?: string
+  plan_revision_id?: string
+  plan_name: string
+  slug: string
+  price_cents: number
+  annual_price_cents: number
+  max_servers: number
+  monthly_tokens: number
+  used_tokens: number
+  expires_at?: string
+  has_active_plan: boolean
+  role: string
+}
+
 export const settingsApi = {
+  async getWorkspaceSubscription() {
+    return apiRequest<WorkspaceSubscriptionDTO>('/api/v1/settings/subscription')
+  },
+  async cancelWorkspaceSubscription() {
+    return apiRequest<{ success: boolean; message: string }>('/api/v1/settings/subscription/cancel', {
+      method: 'POST',
+    })
+  },
   async getWorkspaceSettings() {
     return apiRequest<WorkspaceSettingsDTO>('/api/v1/settings/workspace')
   },

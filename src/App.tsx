@@ -16,6 +16,7 @@ import ApiPricingPage from './pricing/PricingPage'
 import { ServersPage as ApiServersPage, ServerDetailPage as ApiServerDetailPage } from './servers/ServersPages'
 import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage as ApiExecutionsPage, RecentChats, WorkspaceAIUsage } from './chat/ChatPages'
 import { SettingsPage, ProfilePage } from './settings/SettingsPages'
+import ManageSubscriptionModal from './settings/ManageSubscriptionModal'
 import { GoogleAuthCallback } from './auth/GoogleAuthCallback'
 import VerifyEmailPage from './auth/VerifyEmailPage'
 import CheckoutPage from './checkout/CheckoutPage'
@@ -113,6 +114,7 @@ function SidebarProfileMenu({
   onNavigate: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [manageSubOpen, setManageSubOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -148,6 +150,16 @@ function SidebarProfileMenu({
             <strong>{session?.user.full_name || 'Account'}</strong>
             <small>{session?.user.email}</small>
           </div>
+          <button
+            type="button"
+            className="profile-dropdown-item"
+            onClick={() => {
+              setOpen(false)
+              setManageSubOpen(true)
+            }}
+          >
+            <CreditCard size={14} /> Manage subscription
+          </button>
           <NavLink
             to="/profile"
             className="profile-dropdown-item"
@@ -200,6 +212,10 @@ function SidebarProfileMenu({
             <LogOut size={14} /> {loggingOut ? 'Signing out...' : 'Sign out'}
           </button>
         </div>
+      )}
+
+      {manageSubOpen && (
+        <ManageSubscriptionModal close={() => setManageSubOpen(false)} />
       )}
     </div>
   )
