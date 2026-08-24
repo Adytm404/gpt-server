@@ -212,7 +212,7 @@ describe('server pages', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => init?.method === 'DELETE'
       ? new Response(null, { status: 204 })
       : new Response(JSON.stringify(server), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-    renderPage(<MemoryRouter initialEntries={['/servers/srv-1']}><Routes><Route path="/servers/:id" element={<ServerDetailPage />} /><Route path="/servers" element={<div>Server list</div>} /></Routes></MemoryRouter>)
+    renderPage(<MemoryRouter initialEntries={['/dashboard/servers/srv-1']}><Routes><Route path="/dashboard/servers/:id" element={<ServerDetailPage />} /><Route path="/dashboard/servers" element={<div>Server list</div>} /></Routes></MemoryRouter>)
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }))
     expect(screen.getByRole('dialog', { name: 'Delete server?' })).toBeInTheDocument()
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)

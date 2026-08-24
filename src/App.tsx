@@ -92,10 +92,10 @@ function BrandMark() {
 }
 
 const primaryNav = [
-  { to: '/chat', icon: MessageSquare, label: 'Chat' },
-  { to: '/servers', icon: ServerIcon, label: 'Servers' },
-  { to: '/executions', icon: Terminal, label: 'Executions' },
-  { to: '/pricing', icon: CreditCard, label: 'Pricing' },
+  { to: '/dashboard/chat', icon: MessageSquare, label: 'Chat' },
+  { to: '/dashboard/servers', icon: ServerIcon, label: 'Servers' },
+  { to: '/dashboard/executions', icon: Terminal, label: 'Executions' },
+  { to: '/dashboard/pricing', icon: CreditCard, label: 'Pricing' },
 ]
 
 function SidebarProfileMenu({
@@ -161,7 +161,7 @@ function SidebarProfileMenu({
             <CreditCard size={14} /> Manage subscription
           </button>
           <NavLink
-            to="/profile"
+            to="/dashboard/profile"
             className="profile-dropdown-item"
             onClick={() => {
               setOpen(false)
@@ -171,7 +171,7 @@ function SidebarProfileMenu({
             <UserRound size={14} /> Profile
           </NavLink>
           <NavLink
-            to="/settings"
+            to="/dashboard/settings"
             className="profile-dropdown-item"
             onClick={() => {
               setOpen(false)
@@ -226,7 +226,7 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
   const location = useLocation()
   const { session } = useSession()
   const [loggingOut, setLoggingOut] = useState(false)
-  const adminMode = location.pathname.startsWith('/admin')
+  const adminMode = location.pathname.startsWith('/dashboard/admin') || location.pathname.startsWith('/admin')
   const initials = session?.user.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase() || 'U'
   const logout = async () => {
     setLoggingOut(true)
@@ -245,17 +245,17 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       <div className="sidebar-top"><BrandMark /><strong>Platform admin</strong><button className="sidebar-toggle" onClick={toggle} aria-label={expanded ? 'Collapse sidebar' : 'Expand sidebar'}>{expanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}</button></div>
       <div className="admin-sidebar-label"><span>Platform control</span><small>Global configuration</small></div>
       <nav className="nav-stack" aria-label="Platform administration">
-        <NavLink to="/admin/models" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Bot size={18} /><span className="nav-label">Models</span><span className="tooltip">Models</span></NavLink>
-        <NavLink to="/admin/workspaces" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Boxes size={18} /><span className="nav-label">Workspaces</span><span className="tooltip">Workspaces</span></NavLink>
-        <NavLink to="/admin/plans" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Layers3 size={18} /><span className="nav-label">Plans</span><span className="tooltip">Plans</span></NavLink>
-        <NavLink to="/admin/users" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Users size={18} /><span className="nav-label">Users</span><span className="tooltip">Users</span></NavLink>
-        <NavLink to="/admin/transactions" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><CreditCard size={18} /><span className="nav-label">Transactions</span><span className="tooltip">Transactions</span></NavLink>
-        <NavLink to="/admin/auth" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><KeyRound size={18} /><span className="nav-label">Authentication</span><span className="tooltip">Authentication</span></NavLink>
-        <NavLink to="/admin/history" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><FileClock size={18} /><span className="nav-label">Change history</span><span className="tooltip">Change history</span></NavLink>
+        <NavLink to="/dashboard/admin/models" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Bot size={18} /><span className="nav-label">Models</span><span className="tooltip">Models</span></NavLink>
+        <NavLink to="/dashboard/admin/workspaces" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Boxes size={18} /><span className="nav-label">Workspaces</span><span className="tooltip">Workspaces</span></NavLink>
+        <NavLink to="/dashboard/admin/plans" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Layers3 size={18} /><span className="nav-label">Plans</span><span className="tooltip">Plans</span></NavLink>
+        <NavLink to="/dashboard/admin/users" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Users size={18} /><span className="nav-label">Users</span><span className="tooltip">Users</span></NavLink>
+        <NavLink to="/dashboard/admin/transactions" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><CreditCard size={18} /><span className="nav-label">Transactions</span><span className="tooltip">Transactions</span></NavLink>
+        <NavLink to="/dashboard/admin/auth" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><KeyRound size={18} /><span className="nav-label">Authentication</span><span className="tooltip">Authentication</span></NavLink>
+        <NavLink to="/dashboard/admin/history" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><FileClock size={18} /><span className="nav-label">Change history</span><span className="tooltip">Change history</span></NavLink>
       </nav>
       <div className="admin-sidebar-note"><ShieldCheck size={14} /><span><b>Platform scope</b><small>Changes affect every workspace.</small></span></div>
       <div className="sidebar-bottom">
-        <NavLink to="/chat" className="nav-icon" onClick={close}><ArrowLeft size={18} /><span className="nav-label">Back to workspace</span><span className="tooltip">Back to workspace</span></NavLink>
+        <NavLink to="/dashboard/chat" className="nav-icon" onClick={close}><ArrowLeft size={18} /><span className="nav-label">Back to workspace</span><span className="tooltip">Back to workspace</span></NavLink>
         <SidebarProfileMenu initials={initials} session={session} loggingOut={loggingOut} onLogout={logout} admin onNavigate={close} />
       </div>
     </aside>
@@ -269,7 +269,7 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
       </nav>
       <RecentChats />
       <div className="sidebar-bottom">
-        {session?.user.platform_role === 'admin' && <NavLink to="/admin/models" className={cn('nav-icon', 'admin-nav-link', location.pathname.startsWith('/admin') && 'active')}><ShieldCheck size={18} /><span className="nav-label">Platform admin</span><span className="tooltip">Platform admin</span></NavLink>}
+        {session?.user.platform_role === 'admin' && <NavLink to="/dashboard/admin/models" className={cn('nav-icon', 'admin-nav-link', (location.pathname.startsWith('/dashboard/admin') || location.pathname.startsWith('/admin')) && 'active')}><ShieldCheck size={18} /><span className="nav-label">Platform admin</span><span className="tooltip">Platform admin</span></NavLink>}
         <WorkspaceAIUsage admin={session?.user.platform_role === 'admin'} />
         <SidebarProfileMenu initials={initials} session={session} loggingOut={loggingOut} onLogout={logout} onNavigate={close} />
       </div>
@@ -290,16 +290,23 @@ function Topbar({ menu }: { menu: () => void }) {
         setNotifOpen(false)
       }
     }
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNotifOpen(false)
+    }
     document.addEventListener('mousedown', closeNotif)
-    return () => document.removeEventListener('mousedown', closeNotif)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', closeNotif)
+      document.removeEventListener('keydown', handleKey)
+    }
   }, [])
 
-  const adminMode = location.pathname.startsWith('/admin')
-  const section = location.pathname.startsWith('/admin') ? 'Platform admin' : location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/pricing') ? 'Pricing & Plans' : location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.startsWith('/chat/') ? 'AI session' : 'Command center'
+  const adminMode = location.pathname.startsWith('/dashboard/admin') || location.pathname.startsWith('/admin')
+  const section = adminMode ? 'Platform admin' : location.pathname.startsWith('/dashboard/servers') || location.pathname.startsWith('/servers') ? 'Servers' : location.pathname.startsWith('/dashboard/executions') || location.pathname.startsWith('/executions') ? 'Executions' : location.pathname.startsWith('/dashboard/pricing') ? 'Pricing & Plans' : location.pathname.startsWith('/dashboard/settings') || location.pathname.startsWith('/settings') ? 'Settings' : location.pathname.startsWith('/dashboard/profile') || location.pathname.startsWith('/profile') ? 'Profile' : location.pathname.includes('/chat/') ? 'AI session' : 'Command center'
   return <header className="topbar">
     <div className="topbar-left"><button className="mobile-menu icon-button" onClick={menu} aria-label="Open menu"><Menu size={20} /></button>{adminMode ? <span className="workspace-picker admin-context"><ShieldCheck size={14} /> Platform control</span> : <span className="workspace-picker workspace-context"><span className="workspace-dot" /> {session?.workspace.name || 'Workspace'}</span>}<span className="breadcrumb">/</span><span className="section-name">{section}</span></div>
     <div className="topbar-actions" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      {adminMode ? <NavLink to="/chat" className="button secondary compact"><ArrowLeft size={16} /> <span>Workspace</span></NavLink> : <NavLink to="/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink>}
+      {adminMode ? <NavLink to="/dashboard/chat" className="button secondary compact"><ArrowLeft size={16} /> <span>Workspace</span></NavLink> : <NavLink to="/dashboard/chat" className="button dark compact"><Plus size={16} /> <span>New thread</span></NavLink>}
       <div className="topbar-notifications" ref={notifRoot} style={{ position: 'relative' }}>
         <button className="icon-button bordered" aria-label="Notifications" onClick={() => setNotifOpen(open => !open)}>
           <Bell size={17} />
@@ -327,27 +334,28 @@ function AppShell() {
   const [sidebarExpanded, setSidebarExpanded] = useState(() => window.localStorage.getItem('sidebar-expanded') === 'true')
   const toggleSidebar = () => setSidebarExpanded(value => { window.localStorage.setItem('sidebar-expanded', String(!value)); return !value })
   return <ChatThreadsProvider><div className={cn('app-shell', sidebarExpanded && 'sidebar-expanded')}><Sidebar open={menuOpen} close={() => setMenuOpen(false)} expanded={sidebarExpanded} toggle={toggleSidebar} /><div className="app-body"><Topbar menu={() => setMenuOpen(true)} /><main><Routes>
-    <Route path="/chat" element={<ChatHomePage />} />
-    <Route path="/chat/:id" element={<ChatThreadPage />} />
-    <Route path="/servers" element={<ApiServersPage />} />
-    <Route path="/servers/:id" element={<ApiServerDetailPage />} />
-    <Route path="/executions" element={<ApiExecutionsPage />} />
-    <Route path="/pricing" element={<ApiPricingPage mode="dashboard" />} />
-    <Route path="/settings" element={<SettingsPage />} />
-    <Route path="/profile" element={<ProfilePage />} />
-    <Route path="/forbidden" element={<ForbiddenPage />} />
-    <Route path="/admin/*" element={<PlatformAdminRoute><AdminConsole /></PlatformAdminRoute>} />
+    <Route index element={<Navigate to="chat" replace />} />
+    <Route path="chat" element={<ChatHomePage />} />
+    <Route path="chat/:id" element={<ChatThreadPage />} />
+    <Route path="servers" element={<ApiServersPage />} />
+    <Route path="servers/:id" element={<ApiServerDetailPage />} />
+    <Route path="executions" element={<ApiExecutionsPage />} />
+    <Route path="pricing" element={<ApiPricingPage mode="dashboard" />} />
+    <Route path="settings" element={<SettingsPage />} />
+    <Route path="profile" element={<ProfilePage />} />
+    <Route path="forbidden" element={<ForbiddenPage />} />
+    <Route path="admin/*" element={<PlatformAdminRoute><AdminConsole /></PlatformAdminRoute>} />
     <Route path="*" element={<PlaceholderPage />} />
   </Routes></main></div></div></ChatThreadsProvider>
 }
 
 function PlatformAdminRoute({ children }: { children: React.ReactNode }) {
   const { session } = useSession()
-  return session?.user.platform_role === 'admin' ? children : <Navigate to="/forbidden" replace />
+  return session?.user.platform_role === 'admin' ? children : <Navigate to="/dashboard/forbidden" replace />
 }
 
 function ForbiddenPage() {
-  return <div className="forbidden-page page-enter"><div><i><ShieldCheck size={25} /></i><span className="page-eyebrow">Access restricted</span><h1>Platform clearance required.</h1><p>This area is reserved for platform administrators. Your workspace access remains unchanged.</p><NavLink to="/chat" className="button dark"><ArrowLeft size={14} /> Return to command center</NavLink></div></div>
+  return <div className="forbidden-page page-enter"><div><i><ShieldCheck size={25} /></i><span className="page-eyebrow">Access restricted</span><h1>Platform clearance required.</h1><p>This area is reserved for platform administrators. Your workspace access remains unchanged.</p><NavLink to="/dashboard/chat" className="button dark"><ArrowLeft size={14} /> Return to command center</NavLink></div></div>
 }
 
 function AuthenticatedSession() {
@@ -374,15 +382,15 @@ function LandingPage() {
     { icon: Terminal, number: '03', title: 'Watch it run', copy: 'Follow live output, exit codes, and operational history from one focused surface.' },
   ]
   return <div className="landing-page">
-    <nav className="landing-nav"><NavLink to="/" className="landing-brand"><BrandMark /><span>OpsAI</span></NavLink><div className="landing-links"><a href="#workflow">Workflow</a><a href="#security">Security</a><NavLink to="/pricing">Pricing</NavLink></div><NavLink to="/chat" className="button dark">Open workspace <ArrowRight size={15} /></NavLink></nav>
+    <nav className="landing-nav"><NavLink to="/" className="landing-brand"><BrandMark /><span>OpsAI</span></NavLink><div className="landing-links"><a href="#workflow">Workflow</a><a href="#security">Security</a><NavLink to="/pricing">Pricing</NavLink></div><NavLink to="/dashboard/chat" className="button dark">Open workspace <ArrowRight size={15} /></NavLink></nav>
     <main>
-      <section className="landing-hero"><div className="landing-grid" /><div className="landing-copy"><div className="eyebrow"><span className="live-dot" /> AI operations, under your control</div><h1>Your servers.<br />One <em>clear</em> command.</h1><p>Investigate incidents, inspect infrastructure, and run approved SSH operations without losing sight of what changes where.</p><div className="landing-actions"><NavLink to="/chat" className="button dark">Start operating <ArrowRight size={16} /></NavLink><a href="#workflow" className="landing-text-link">See how it works <ChevronDown size={14} /></a></div><div className="landing-proof"><span><ShieldCheck size={14} /> Approval-first</span><span><KeyRound size={14} /> Key-based SSH</span><span><History size={14} /> Full audit trail</span></div></div>
+      <section className="landing-hero"><div className="landing-grid" /><div className="landing-copy"><div className="eyebrow"><span className="live-dot" /> AI operations, under your control</div><h1>Your servers.<br />One <em>clear</em> command.</h1><p>Investigate incidents, inspect infrastructure, and run approved SSH operations without losing sight of what changes where.</p><div className="landing-actions"><NavLink to="/dashboard/chat" className="button dark">Start operating <ArrowRight size={16} /></NavLink><a href="#workflow" className="landing-text-link">See how it works <ChevronDown size={14} /></a></div><div className="landing-proof"><span><ShieldCheck size={14} /> Approval-first</span><span><KeyRound size={14} /> Key-based SSH</span><span><History size={14} /> Full audit trail</span></div></div>
         <div className={cn('landing-chat-preview', previewRunning && 'demo-running')}><div className="preview-chat"><div className="preview-chat-head"><div><small>AI OPERATION</small><strong>Diagnose server health</strong></div><span><i /> Connected</span></div><div className="preview-conversation"><div className="preview-message preview-user"><i>AR</i><div><span><b>You</b><small>just now</small></span><p>Find why worker CPU is elevated.</p><em><ServerIcon size={10} /> Production API</em></div></div><div className="preview-message preview-ai"><i><Sparkles size={12} /></i><div><span><b>OpsAI</b><small>{previewRunning ? 'working...' : 'ready to run'}</small></span><p>I'll inspect system load, top processes, and service health.</p><div className="preview-plan"><header><span><Command size={12} /><b>Execution plan</b></span><em><ShieldCheck size={10} /> Low risk</em></header>{['Check system resource pressure', 'Find top CPU processes', 'Inspect critical services'].map((item, index) => <div className="preview-plan-step" key={item}><i>{index + 1}</i><span>{item}</span></div>)}<code>ps aux --sort=-%cpu | head -n 6</code><footer><button onClick={() => openDemo('edit', 'Edit execution plan', 'ps aux --sort=-%cpu | head -n 6')}>Edit plan</button><button onClick={() => { setPreviewRunning(true); window.setTimeout(() => { setPreviewRunning(false); showToast('Preview operation completed') }, 2400) }}>{previewRunning ? 'Running...' : 'Approve & run'} <Play size={9} fill="currentColor" /></button></footer></div></div></div></div><div className="preview-composer"><span>Ask a follow-up...</span><em><ServerIcon size={10} /> Production API</em><i><ArrowRight size={11} /></i></div></div><div className="preview-execution"><div className="preview-execution-head"><small><i /> {previewRunning ? 'LIVE' : 'READY'}</small><strong>Execution output</strong></div><div className="preview-context"><span><ServerIcon size={10} /> Production API</span><span><Clock3 size={10} /> {previewRunning ? 'running' : 'waiting'}</span></div><div className="preview-terminal"><header><span>OUTPUT</span><b>All&nbsp;&nbsp; stdout&nbsp;&nbsp; stderr</b></header><div className="preview-logs"><p><i>14:32:08</i><b>01</b><code>Secure SSH session established</code></p><p><i>14:32:09</i><b>02</b><code>$ uptime &amp;&amp; free -m</code></p><p><i>14:32:09</i><b>03</b><code>load average: 0.84, 0.92, 0.76</code></p><p><i>14:32:10</i><b>04</b><code>$ ps aux --sort=-%cpu</code></p><p><i>14:32:10</i><b>05</b><code>node worker.js 31.2% CPU</code></p><span><i /> Receiving output</span></div></div><footer><span><i /> Secure session active</span></footer></div></div>
       </section>
       <section className="landing-status"><span>BUILT FOR CONTROLLED OPERATIONS</span><div /><p>3 servers online</p><div /><p>All commands visible</p><div /><p>Zero hidden execution</p></section>
       <section className="landing-workflow" id="workflow"><div className="landing-section-head"><span className="page-eyebrow">One operational loop</span><h2>From question to verified output.</h2><p>Keep human judgment in the path without slowing down diagnosis.</p></div><div className="capability-grid">{capabilities.map(({ icon: Icon, number, title, copy }) => <article key={number}><div className="capability-top"><i><Icon size={19} /></i><span>{number}</span></div><h3>{title}</h3><p>{copy}</p></article>)}</div></section>
       <section className="landing-security" id="security"><div><span className="page-eyebrow">Security by default</span><h2>Access stays explicit.<br /><em>Actions stay visible.</em></h2></div><div className="security-list"><span><KeyRound size={18} /><b>SSH keys, not saved passwords</b><small>Credentials bootstrap encrypted key-based access.</small></span><span><ShieldCheck size={18} /><b>Approval before execution</b><small>Inspect generated plans and commands before run.</small></span><span><History size={18} /><b>Immutable operational context</b><small>Keep server, output, duration, and result together.</small></span></div></section>
-      <section className="landing-cta"><span className="page-eyebrow">Your infrastructure is talking</span><h2>Ask the right question.</h2><p>Open command center and start with a read-only health check.</p><NavLink to="/chat" className="button dark">Open command center <ArrowRight size={16} /></NavLink></section>
+      <section className="landing-cta"><span className="page-eyebrow">Your infrastructure is talking</span><h2>Ask the right question.</h2><p>Open command center and start with a read-only health check.</p><NavLink to="/dashboard/chat" className="button dark">Open command center <ArrowRight size={16} /></NavLink></section>
     </main><footer className="landing-footer"><div className="landing-brand"><BrandMark /><span>OpsAI</span></div><p>Human-approved infrastructure operations.</p><span>2026 / NORTHSTAR OPS</span></footer>
   </div>
 }
@@ -472,7 +480,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         setLoading(false)
         return
       }
-      navigate(register ? '/pricing' : '/chat', { replace: true })
+      navigate(register ? '/dashboard/pricing?mode=onboarding' : '/dashboard/chat', { replace: true })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to complete request')
       setLoading(false)
@@ -615,7 +623,18 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
 }
 
 function App() {
-  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<ApiPricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/verify-email" element={<VerifyEmailPage />} /><Route path="/checkout/:planId" element={<CheckoutPage />} /><Route path="/checkout/result" element={<PaymentResultPage />} /><Route path="/auth/google/callback" element={<GoogleAuthCallback />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
+  return <><DemoUIHost /><Routes>
+    <Route path="/" element={<LandingPage />} />
+    <Route path="/pricing" element={<ApiPricingPage mode="public" />} />
+    <Route path="/login" element={<AuthPage mode="login" />} />
+    <Route path="/register" element={<AuthPage mode="register" />} />
+    <Route path="/verify-email" element={<VerifyEmailPage />} />
+    <Route path="/checkout/:planId" element={<CheckoutPage />} />
+    <Route path="/checkout/result" element={<PaymentResultPage />} />
+    <Route path="/auth/google/callback" element={<GoogleAuthCallback />} />
+    <Route path="/dashboard/*" element={<AuthenticatedApp />} />
+    <Route path="/*" element={<AuthenticatedApp />} />
+  </Routes></>
 }
 
 function StatusPill({ status }: { status: Server['status'] }) {

@@ -190,7 +190,7 @@ export default function PaymentResultPage() {
                   <button
                     className="button dark auth-submit"
                     style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-                    onClick={() => navigate("/chat")}
+                    onClick={() => navigate("/dashboard/chat")}
                   >
                     Open Workspace <ArrowRight size={14} />
                   </button>
@@ -221,7 +221,7 @@ export default function PaymentResultPage() {
                     </button>
                   </>
                 ) : (
-                  <NavLink to="/pricing" className="button dark auth-submit" style={{ textDecoration: "none" }}>
+                  <NavLink to="/dashboard/pricing" className="button dark auth-submit" style={{ textDecoration: "none" }}>
                     Choose Another Plan
                   </NavLink>
                 )}
@@ -230,7 +230,7 @@ export default function PaymentResultPage() {
           ) : null}
 
           <p className="auth-switch" style={{ marginTop: 24 }}>
-            <NavLink to="/chat">Return to Workspace</NavLink>
+            <NavLink to="/dashboard/chat">Return to Workspace</NavLink>
           </p>
           <div className="auth-trust" style={{ marginTop: 24 }}>
             <ShieldCheck size={12} /> Encrypted session / Duitku POP Verified

@@ -21,7 +21,7 @@ function ThreadDestination() {
   return <div>thread destination:{JSON.stringify(location.state)}</div>
 }
 
-function renderWithThreads(node: React.ReactNode, route = '/chat') {
+function renderWithThreads(node: React.ReactNode, route = '/dashboard/chat') {
   return render(<MemoryRouter initialEntries={[route]}><DialogProvider><ChatThreadsProvider>{node}</ChatThreadsProvider></DialogProvider></MemoryRouter>)
 }
 
@@ -42,7 +42,7 @@ describe('real chat workspace', () => {
       if (url.endsWith('/chat/threads')) return json({ threads: [] })
       throw new Error(`Unexpected request: ${url}`)
     })
-    renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<ThreadDestination />} /></Routes>)
+    renderWithThreads(<Routes><Route path="/dashboard/chat" element={<ChatHomePage />} /><Route path="/dashboard/chat/:id" element={<ThreadDestination />} /></Routes>)
 
     expect(await screen.findByText('Select server')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /Select server/ }))
@@ -68,7 +68,7 @@ describe('real chat workspace', () => {
       if (url.endsWith('/chat/threads')) return json({ threads: [] })
       throw new Error(`Unexpected request: ${url}`)
     })
-    renderWithThreads(<Routes><Route path="/chat" element={<ChatHomePage />} /><Route path="/chat/:id" element={<ThreadDestination />} /></Routes>)
+    renderWithThreads(<Routes><Route path="/dashboard/chat" element={<ChatHomePage />} /><Route path="/dashboard/chat/:id" element={<ThreadDestination />} /></Routes>)
     await userEvent.click(screen.getByRole('button', { name: /Select server/ }))
     await userEvent.click(screen.getByRole('option', { name: /Edge One/ }))
     await userEvent.click(await screen.findByRole('button', { name: 'Execution policy' }))
@@ -329,7 +329,7 @@ describe('real chat workspace', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => json(String(input).endsWith('/chat/config') ? { configured: true, model_id: 'model-1', monthly_token_limit: 1000, used_tokens: 0 } : String(input).endsWith('/servers') ? { servers: [] } : { threads: [] }))
     renderWithThreads(<ChatHomePage />)
     expect(await screen.findByText('No servers connected')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Connect a server' })).toHaveAttribute('href', '/servers')
+    expect(screen.getByRole('link', { name: 'Connect a server' })).toHaveAttribute('href', '/dashboard/servers')
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })
 

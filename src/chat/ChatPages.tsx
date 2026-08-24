@@ -139,7 +139,7 @@ export function RecentChats() {
     try {
       await chatApi.updateThread(thread.id, { title: thread.title, status: 'archived' })
       await refresh()
-      navigate('/chat')
+      navigate('/dashboard/chat')
     } catch (caught) {
       await dialog.notice({ title: 'Unable to archive chat', description: caught instanceof Error ? caught.message : 'Unable to archive chat', tone: 'destructive' })
     } finally {
@@ -155,7 +155,7 @@ export function RecentChats() {
     try {
       await chatApi.deleteThread(thread.id)
       await refresh()
-      navigate('/chat')
+      navigate('/dashboard/chat')
     } catch (caught) {
       await dialog.notice({ title: 'Unable to delete chat', description: caught instanceof Error ? caught.message : 'Unable to delete chat', tone: 'destructive' })
     } finally {
@@ -163,13 +163,13 @@ export function RecentChats() {
     }
   }
 
-  return <div className="sidebar-history"><div><span>Recent chats</span><NavLink to="/chat" aria-label="New chat"><Plus size={14} /></NavLink></div>
+  return <div className="sidebar-history"><div><span>Recent chats</span><NavLink to="/dashboard/chat" aria-label="New chat"><Plus size={14} /></NavLink></div>
     {loading && <p className="chat-list-state">Loading chats...</p>}
     {!loading && error && <p className="chat-list-state" role="alert">{error}</p>}
     {!loading && !error && threads.length === 0 && <p className="chat-list-state">No recent chats</p>}
     {threads.map(thread => (
       <div key={thread.id} className="history-link-container">
-        <NavLink to={`/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active', menuThreadId === thread.id && 'menu-open')}>
+        <NavLink to={`/dashboard/chat/${thread.id}`} className={({ isActive }) => cn('history-link', isActive && 'active', menuThreadId === thread.id && 'menu-open')}>
           <MessageSquare size={14} />
           <span>
             <div className="history-link-header">
@@ -435,12 +435,12 @@ export function ChatHomePage() {
   }, [])
   const submit = async (content: string, policy: ChatPolicy) => {
     const created = await chatApi.createThread({ serverId: selected, title: content.slice(0, 80) })
-    navigate(`/chat/${created.id}`, { state: { prompt: content, policy } })
+    navigate(`/dashboard/chat/${created.id}`, { state: { prompt: content, policy } })
     void refresh()
   }
   return <div className="home-page page-enter"><div className="ambient-grid" /><section className="hero"><h1>What needs attention<br />across your <em>servers?</em></h1><p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
     {(error || configError) && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error || configError}</div>}
-    {!loading && !configLoading && !error && !configError && config?.configured === false ? <div className="chat-empty-state"><AlertTriangle size={24} /><strong>Workspace AI unavailable</strong><p>Workspace AI is not configured. Ask platform admin to assign an active model and token quota.</p></div> : !loading && !configLoading && !error && !configError && servers.length === 0 ? <><div className="chat-empty-state"><ServerIcon size={24} /><strong>No servers connected</strong><p>Connect a server before starting an operational chat.</p><NavLink className="button dark" to="/servers">Connect a server</NavLink></div><Composer servers={[]} selectedServer="" onSubmit={submit} disabled disabledReason="Connect a server to start a chat." /></> : config?.configured !== false && <Composer servers={servers} selectedServer={selected} setSelectedServer={setSelected} onSubmit={submit} preset={preset} disabled={loading || configLoading || Boolean(error || configError)} />}
+    {!loading && !configLoading && !error && !configError && config?.configured === false ? <div className="chat-empty-state"><AlertTriangle size={24} /><strong>Workspace AI unavailable</strong><p>Workspace AI is not configured. Ask platform admin to assign an active model and token quota.</p></div> : !loading && !configLoading && !error && !configError && servers.length === 0 ? <><div className="chat-empty-state"><ServerIcon size={24} /><strong>No servers connected</strong><p>Connect a server before starting an operational chat.</p><NavLink className="button dark" to="/dashboard/servers">Connect a server</NavLink></div><Composer servers={[]} selectedServer="" onSubmit={submit} disabled disabledReason="Connect a server to start a chat." /></> : config?.configured !== false && <Composer servers={servers} selectedServer={selected} setSelectedServer={setSelected} onSubmit={submit} preset={preset} disabled={loading || configLoading || Boolean(error || configError)} />}
     <div className="trust-line"><ShieldCheck size={14} /> Selected server defines operation scope. Every execution requires approval.</div></section>
     <section className="suggestions"><div className="section-kicker">Prompt templates</div><div className="suggestion-grid">{suggestions.map(([prompt, meta], index) => <button key={prompt} className="suggestion-card" style={{ animationDelay: `${index * 80 + 200}ms` }} disabled={!selected} onClick={() => setPreset(prompt)}><div className="suggestion-icon"><Command size={18} /></div><div><strong>{prompt}</strong><span>{meta}</span></div></button>)}</div></section>
   </div>
@@ -790,12 +790,12 @@ export function ChatThreadPage() {
     catch (caught) { const description = caught instanceof Error ? caught.message : 'Unable to rename chat'; setError(description); await dialog.notice({ title: 'Unable to rename chat', description, tone: 'destructive' }) }
     finally { setActionPending(false) }
   }
-  const archive = async () => { if (!thread || busy) return; const title = thread.title; await chatApi.updateThread(id, { title, status: 'archived' }); await refreshThreads(); navigate('/chat') }
+  const archive = async () => { if (!thread || busy) return; const title = thread.title; await chatApi.updateThread(id, { title, status: 'archived' }); await refreshThreads(); navigate('/dashboard/chat') }
   const remove = async () => {
     if (busy || actionPending) return
     setActionPending(true)
     if (!await dialog.confirm({ title: 'Delete chat?', description: `“${thread!.title}” and its conversation history will be permanently removed.`, confirmLabel: 'Delete chat', tone: 'destructive' })) { setActionPending(false); return }
-    try { await chatApi.deleteThread(id); await refreshThreads(); navigate('/chat') }
+    try { await chatApi.deleteThread(id); await refreshThreads(); navigate('/dashboard/chat') }
     catch (caught) { const description = caught instanceof Error ? caught.message : 'Unable to delete chat'; setError(description); await dialog.notice({ title: 'Unable to delete chat', description, tone: 'destructive' }) }
     finally { setActionPending(false) }
   }
@@ -824,5 +824,5 @@ export function ExecutionsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   useEffect(() => { chatApi.listOperations().then(setOperations).catch(caught => setError(caught instanceof Error ? caught.message : 'Unable to load executions')).finally(() => setLoading(false)) }, [])
-  return <div className="content-page page-enter"><div className="page-heading"><div><span className="page-eyebrow">Operations</span><h1>Executions</h1><p>Every command, approval, and output reported by operation API.</p></div></div>{loading && <p>Loading executions...</p>}{error && <div className="auth-error" role="alert">{error}</div>}{!loading && !error && operations.length === 0 && <div className="chat-empty-state"><Terminal size={24} /><strong>No executions yet</strong><p>Approved chat operations appear here.</p></div>}{operations.length > 0 && <div className="execution-table" data-testid="executions-table"><div className="execution-table-head"><span>Operation</span><span>Server</span><span>Status</span><span>Steps</span><span>Created</span></div>{operations.map(operation => <NavLink to={operation.threadId ? `/chat/${operation.threadId}` : '/executions'} className="execution-table-row" key={operation.id}><span><i><Terminal size={16} /></i><span><strong>{operation.title}</strong><small>{operation.id}</small></span></span><span>{operation.serverName || operation.serverId || 'Unavailable'}</span><span><b className={cn('table-status', ['failed', 'cancelled', 'canceled', 'rejected'].includes(operation.status) && 'failed')}><i />{operation.status.replaceAll('_', ' ')}</b></span><span>{operation.steps.filter(step => ['completed', 'succeeded'].includes(step.status)).length} / {operation.steps.length}</span><span>{operation.createdAt ? new Date(operation.createdAt).toLocaleString() : '-'}</span></NavLink>)}</div>}</div>
+  return <div className="content-page page-enter"><div className="page-heading"><div><span className="page-eyebrow">Operations</span><h1>Executions</h1><p>Every command, approval, and output reported by operation API.</p></div></div>{loading && <p>Loading executions...</p>}{error && <div className="auth-error" role="alert">{error}</div>}{!loading && !error && operations.length === 0 && <div className="chat-empty-state"><Terminal size={24} /><strong>No executions yet</strong><p>Approved chat operations appear here.</p></div>}{operations.length > 0 && <div className="execution-table" data-testid="executions-table"><div className="execution-table-head"><span>Operation</span><span>Server</span><span>Status</span><span>Steps</span><span>Created</span></div>{operations.map(operation => <NavLink to={operation.threadId ? `/dashboard/chat/${operation.threadId}` : '/dashboard/executions'} className="execution-table-row" key={operation.id}><span><i><Terminal size={16} /></i><span><strong>{operation.title}</strong><small>{operation.id}</small></span></span><span>{operation.serverName || operation.serverId || 'Unavailable'}</span><span><b className={cn('table-status', ['failed', 'cancelled', 'canceled', 'rejected'].includes(operation.status) && 'failed')}><i />{operation.status.replaceAll('_', ' ')}</b></span><span>{operation.steps.filter(step => ['completed', 'succeeded'].includes(step.status)).length} / {operation.steps.length}</span><span>{operation.createdAt ? new Date(operation.createdAt).toLocaleString() : '-'}</span></NavLink>)}</div>}</div>
 }

@@ -684,7 +684,7 @@ function PlansPage() {
         title="Plans"
         copy="Define pricing, limits, model access, and customer-facing entitlements."
         action={
-          <NavLink className="button dark" to="/admin/plans/new">
+          <NavLink className="button dark" to="/dashboard/admin/plans/new">
             <Plus size={15} /> Create plan
           </NavLink>
         }
@@ -752,7 +752,7 @@ function PlansPage() {
                 <div className="admin-row-actions">
                   <button
                     title="Edit"
-                    onClick={() => navigate(`/admin/plans/${plan.id}`)}
+                    onClick={() => navigate(`/dashboard/admin/plans/${plan.id}`)}
                   >
                     <Edit3 size={14} />
                   </button>
@@ -769,7 +769,7 @@ function PlansPage() {
                   </button>
                   <button
                     title="Preview"
-                    onClick={() => navigate(`/admin/plans/${plan.id}/preview`)}
+                    onClick={() => navigate(`/dashboard/admin/plans/${plan.id}/preview`)}
                   >
                     <Eye size={14} />
                   </button>
@@ -870,7 +870,7 @@ function PlanEditor() {
     );
   return (
     <main className="admin-page editor-page">
-      <button className="admin-back" onClick={() => navigate("/admin/plans")}>
+      <button className="admin-back" onClick={() => navigate("/dashboard/admin/plans")}>
         <ArrowLeft size={14} /> Plans
       </button>
       <PageHead
@@ -1239,7 +1239,7 @@ function PlanPreview() {
     <main className="admin-page preview-page">
       <button
         className="admin-back"
-        onClick={() => navigate(`/admin/plans/${plan.id}`)}
+        onClick={() => navigate(`/dashboard/admin/plans/${plan.id}`)}
       >
         <ArrowLeft size={14} /> Back to editor
       </button>
@@ -1251,7 +1251,7 @@ function PlanPreview() {
           <div className="head-actions">
             <button
               className="button secondary"
-              onClick={() => navigate(`/admin/plans/${plan.id}`)}
+              onClick={() => navigate(`/dashboard/admin/plans/${plan.id}`)}
             >
               <Edit3 size={14} /> Edit
             </button>

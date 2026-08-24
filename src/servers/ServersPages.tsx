@@ -350,7 +350,7 @@ function ServerRow({
   return (
     <button
       className="server-row"
-      onClick={() => navigate(`/servers/${server.id}`)}
+      onClick={() => navigate(`/dashboard/servers/${server.id}`)}
     >
       <span className="server-identity">
         <i className={cn("server-glyph", server.status.toLowerCase())}>
@@ -891,7 +891,7 @@ export function ServerDetailPage() {
     setActionError("");
     try {
       await serversApi.remove(id);
-      navigate("/servers", { replace: true });
+      navigate("/dashboard/servers", { replace: true });
     } catch (caught) {
       const description = message(caught);
       setActionError(description);
@@ -912,7 +912,7 @@ export function ServerDetailPage() {
   const snapshot = server.latestSnapshot;
   return (
     <div className="content-page server-detail-page page-enter">
-      <button className="back-link" onClick={() => navigate("/servers")}>
+      <button className="back-link" onClick={() => navigate("/dashboard/servers")}>
         <ArrowLeft size={15} /> All servers
       </button>
       <section className="server-overview-card">
