@@ -421,6 +421,7 @@ const suggestions = [
 
 export function ChatHomePage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { refresh, config, configLoading, configError } = useChatThreads()
   const [servers, setServers] = useState<Server[]>([])
   const [selected, setSelected] = useState('')
@@ -429,11 +430,17 @@ export function ChatHomePage() {
   const [preset, setPreset] = useState('')
   const [showNoServerModal, setShowNoServerModal] = useState(false)
 
+  const serverParam = new URLSearchParams(location.search).get('server') || ''
+
   const loadServers = useCallback(async () => {
     try {
       const result = await serversApi.list()
       setServers(result.servers)
-      setSelected('')
+      if (serverParam && result.servers.some(s => s.id === serverParam)) {
+        setSelected(serverParam)
+      } else {
+        setSelected('')
+      }
       if (result.servers.length === 0) {
         setShowNoServerModal(true)
       } else {
@@ -444,7 +451,7 @@ export function ChatHomePage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [serverParam])
 
   useEffect(() => {
     void loadServers()

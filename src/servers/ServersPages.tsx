@@ -22,6 +22,7 @@ import {
   Search,
   Server as ServerIcon,
   ShieldCheck,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -932,6 +933,12 @@ export function ServerDetailPage() {
             </div>
           </div>
           <div className="heading-actions">
+            <button
+              className="button dark"
+              onClick={() => navigate(`/dashboard/chat?server=${encodeURIComponent(server.id)}`)}
+            >
+              <Sparkles size={15} /> Chat with OpsAI
+            </button>
             <button
               className="button secondary"
               onClick={() => setEditing(true)}
