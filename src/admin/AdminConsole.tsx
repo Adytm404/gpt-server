@@ -21,6 +21,7 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  CreditCard,
   Edit3,
   Eye,
   EyeOff,
@@ -1512,13 +1513,24 @@ function AuthSettingsPage() {
   const [testingSmtp, setTestingSmtp] = useState(false);
   const [testResult, setTestResult] = useState<{ success?: boolean; message?: string } | null>(null);
 
+  // Duitku Payment Gateway Settings
+  const [duitkuEnabled, setDuitkuEnabled] = useState(false);
+  const [duitkuEnv, setDuitkuEnv] = useState<"sandbox" | "production">("sandbox");
+  const [merchantCode, setMerchantCode] = useState("");
+  const [merchantKey, setMerchantKey] = useState("");
+  const [hasMerchantKey, setHasMerchantKey] = useState(false);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [returnUrl, setReturnUrl] = useState("");
+  const [expiryPeriod, setExpiryPeriod] = useState(60);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [googleRes, smtpRes] = await Promise.all([
+      const [googleRes, smtpRes, duitkuRes] = await Promise.all([
         adminApi.getGoogleOAuthSettings(),
         adminApi.getSMTPSettings(),
+        adminApi.getDuitkuSettings(),
       ]);
       setEnabled(googleRes.enabled);
       setClientId(googleRes.client_id || "");
@@ -1534,6 +1546,14 @@ function AuthSettingsPage() {
       setSmtpFromEmail(smtpRes.from_email || "");
       setSmtpFromName(smtpRes.from_name || "OpsAI");
       setSmtpEncryption(smtpRes.encryption || "starttls");
+
+      setDuitkuEnabled(duitkuRes.enabled);
+      setDuitkuEnv(duitkuRes.environment || "sandbox");
+      setMerchantCode(duitkuRes.merchant_code || "");
+      setHasMerchantKey(duitkuRes.has_api_key);
+      setCallbackUrl(duitkuRes.callback_url || `${window.location.origin}/api/v1/billing/duitku/callback`);
+      setReturnUrl(duitkuRes.return_url || `${window.location.origin}/checkout/result`);
+      setExpiryPeriod(duitkuRes.expiry_period_minutes || 60);
     } catch (caught) {
       setError(message(caught));
     } finally {
@@ -1549,7 +1569,7 @@ function AuthSettingsPage() {
     setSaving(true);
     setError("");
     try {
-      const [googleRes, smtpRes] = await Promise.all([
+      const [googleRes, smtpRes, duitkuRes] = await Promise.all([
         adminApi.setGoogleOAuthSettings({
           enabled,
           client_id: clientId.trim(),
@@ -1567,6 +1587,15 @@ function AuthSettingsPage() {
           from_name: smtpFromName.trim(),
           encryption: smtpEncryption,
         }),
+        adminApi.setDuitkuSettings({
+          enabled: duitkuEnabled,
+          environment: duitkuEnv,
+          merchant_code: merchantCode.trim(),
+          api_key: merchantKey.trim() || undefined,
+          callback_url: callbackUrl.trim(),
+          return_url: returnUrl.trim(),
+          expiry_period_minutes: Number(expiryPeriod) || 60,
+        }),
       ]);
 
       setEnabled(googleRes.enabled);
@@ -1579,7 +1608,13 @@ function AuthSettingsPage() {
       setHasSmtpPassword(smtpRes.has_password);
       setSmtpPassword("");
 
-      notify("Platform authentication & SMTP settings updated");
+      setDuitkuEnabled(duitkuRes.enabled);
+      setDuitkuEnv(duitkuRes.environment);
+      setMerchantCode(duitkuRes.merchant_code);
+      setHasMerchantKey(duitkuRes.has_api_key);
+      setMerchantKey("");
+
+      notify("Platform authentication, email, and payment settings updated");
     } catch (caught) {
       setError(message(caught));
     } finally {
@@ -1794,6 +1829,106 @@ function AuthSettingsPage() {
                 </p>
               )}
             </div>
+          </div>
+        </EditorSection>
+
+        <EditorSection
+          number="03"
+          title="Duitku POP Payment Gateway"
+          copy="Configure Duitku Merchant credentials, Sandbox/Production mode, and webhook URLs for automated plan subscriptions."
+        >
+          <div className="admin-form grid">
+            <label className="wide" style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <input
+                type="checkbox"
+                checked={duitkuEnabled}
+                onChange={(e) => setDuitkuEnabled(e.target.checked)}
+                style={{ width: "auto", margin: 0 }}
+              />
+              <span><b>Enable Duitku Payment Gateway</b><small style={{ display: "block", color: "var(--muted)" }}>Allow workspace users to purchase and upgrade subscription plans using QRIS, Virtual Account, E-Wallet, and Card via Duitku POP.</small></span>
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>Environment Mode</span>
+              <select
+                value={duitkuEnv}
+                onChange={(e) => setDuitkuEnv(e.target.value as "sandbox" | "production")}
+              >
+                <option value="sandbox">Sandbox (Testing / Uji Coba)</option>
+                <option value="production">Production (Live Payments)</option>
+              </select>
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>Merchant Code</span>
+              <input
+                placeholder="e.g. D1234 or DS1234"
+                value={merchantCode}
+                onChange={(e) => setMerchantCode(e.target.value)}
+              />
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>Merchant API Key {hasMerchantKey && <small style={{ color: "var(--green)" }}>(Configured)</small>}</span>
+              <input
+                type="password"
+                placeholder={hasMerchantKey ? "Leave blank to keep existing API Key" : "Enter Duitku Merchant API Key"}
+                value={merchantKey}
+                onChange={(e) => setMerchantKey(e.target.value)}
+              />
+            </label>
+
+            <label>
+              <span>Invoice Expiry (Minutes)</span>
+              <input
+                type="number"
+                placeholder="60"
+                value={expiryPeriod}
+                onChange={(e) => setExpiryPeriod(Number(e.target.value))}
+              />
+            </label>
+
+            <label className="wide">
+              <span>Webhook / Callback URL</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={callbackUrl}
+                  onChange={(e) => setCallbackUrl(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="button secondary compact"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(callbackUrl);
+                    notify("Callback URL copied to clipboard");
+                  }}
+                >
+                  <Copy size={13} /> Copy
+                </button>
+              </div>
+              <small style={{ marginTop: 4, color: "var(--muted)" }}>Configure this in your Duitku Merchant Portal under Project &gt; Callback URL.</small>
+            </label>
+
+            <label className="wide">
+              <span>Return / Redirect URL</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  value={returnUrl}
+                  onChange={(e) => setReturnUrl(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="button secondary compact"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(returnUrl);
+                    notify("Return URL copied to clipboard");
+                  }}
+                >
+                  <Copy size={13} /> Copy
+                </button>
+              </div>
+              <small style={{ marginTop: 4, color: "var(--muted)" }}>Configure this in your Duitku Merchant Portal under Project &gt; Return URL.</small>
+            </label>
           </div>
         </EditorSection>
       </section>

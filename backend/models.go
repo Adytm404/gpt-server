@@ -56,6 +56,8 @@ func (s *server) adminRoutes(r chi.Router) {
 	r.Get("/smtp", s.getAdminSMTP)
 	r.With(s.requireMutation).Post("/smtp", s.setAdminSMTP)
 	r.With(s.requireMutation).Post("/smtp/test", s.testAdminSMTP)
+	r.Get("/duitku", s.getAdminDuitku)
+	r.With(s.requireMutation).Post("/duitku", s.setAdminDuitku)
 	r.Get("/plans", s.listPlans)
 	r.With(s.requireMutation).Post("/plans", s.createPlan)
 	r.Get("/plans/{id}", s.getPlan)

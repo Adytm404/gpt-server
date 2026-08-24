@@ -119,4 +119,21 @@ describe('admin DTO mapping', () => {
     await expect(adminApi.verifyEmail('token-123')).resolves.toEqual({ success: true, message: 'Verified' })
     await expect(adminApi.resendVerification('user@domain.com')).resolves.toEqual({ success: true, message: 'Sent' })
   })
+
+  it('fetches and updates Duitku settings and creates checkout order', async () => {
+    const duitkuSettings = { merchant_code: 'D1234', environment: 'sandbox' as const, enabled: true, callback_url: 'http://api.local/callback', return_url: 'http://app.local/result', expiry_period_minutes: 60, has_api_key: true }
+    const checkoutOrder = { order_id: 'order-1', merchant_order_id: 'OPS-123', reference: 'REF-123', payment_url: 'https://app-sandbox.duitku.com/pay', amount_idr: 50000, environment: 'sandbox', plan_name: 'Pro', billing_period: 'monthly' }
+    const orderStatus = { order_id: 'order-1', merchant_order_id: 'OPS-123', reference: 'REF-123', plan_name: 'Pro', billing_period: 'monthly', amount_idr: 50000, status: 'paid' as const, payment_url: 'https://app-sandbox.duitku.com/pay', created_at: '2026-08-24T00:00:00Z' }
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify(duitkuSettings), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(duitkuSettings), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(checkoutOrder), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(orderStatus), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(adminApi.getDuitkuSettings()).resolves.toEqual(duitkuSettings)
+    await expect(adminApi.setDuitkuSettings({ merchant_code: 'D1234', environment: 'sandbox', enabled: true })).resolves.toEqual(duitkuSettings)
+    await expect(adminApi.createCheckoutOrder({ plan_id: 'plan-1', billing_period: 'monthly' })).resolves.toEqual(checkoutOrder)
+    await expect(adminApi.getOrderStatus('OPS-123')).resolves.toEqual(orderStatus)
+  })
 })

@@ -271,8 +271,12 @@ func (s *server) routes() http.Handler {
 		r.Post("/auth/google/callback", s.handleGoogleCallback)
 		r.Get("/me", s.me)
 		r.Get("/public/plans", s.listPublicPlans)
+		r.Get("/public/billing/config", s.getPublicBillingConfig)
+		r.Post("/billing/duitku/callback", s.handleDuitkuCallback)
+		r.Get("/billing/orders/status", s.getOrderStatus)
 		r.Group(func(r chi.Router) {
 			r.Use(s.authenticate)
+			r.Post("/billing/checkout", s.createCheckoutOrder)
 			r.Route("/servers", s.serverRoutes)
 			r.Route("/chat", s.chatRoutes)
 			r.Route("/operations", s.operationRoutes)

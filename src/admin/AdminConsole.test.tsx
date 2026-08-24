@@ -181,12 +181,17 @@ it('loads and displays authentication & SMTP settings', async () => {
     if (url.endsWith('/admin/smtp')) {
       return new Response(JSON.stringify({ host: 'smtp.domain.com', port: 587, username: 'alerts@domain.com', from_email: 'alerts@domain.com', from_name: 'OpsAI', encryption: 'starttls', enabled: true, require_email_verification: true, has_password: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
+    if (url.endsWith('/admin/duitku')) {
+      return new Response(JSON.stringify({ merchant_code: 'DS1234', environment: 'sandbox', enabled: true, callback_url: 'http://localhost:8080/callback', return_url: 'http://localhost:5173/result', expiry_period_minutes: 60, has_api_key: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
     throw new Error(`Unexpected request: ${url}`)
   })
   render(<MemoryRouter initialEntries={['/auth']}><AdminConsole /></MemoryRouter>)
   expect(await screen.findByText('Authentication & Email Settings')).toBeInTheDocument()
   expect(screen.getByText('Google OAuth 2.0')).toBeInTheDocument()
   expect(screen.getByText('SMTP Email & Registration Verification')).toBeInTheDocument()
+  expect(screen.getByText('Duitku POP Payment Gateway')).toBeInTheDocument()
   expect(screen.getByDisplayValue('smtp.domain.com')).toBeInTheDocument()
+  expect(screen.getByDisplayValue('DS1234')).toBeInTheDocument()
   expect(screen.getAllByDisplayValue('alerts@domain.com')).toHaveLength(2)
 })

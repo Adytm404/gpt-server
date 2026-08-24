@@ -18,6 +18,8 @@ import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage as Ap
 import { SettingsPage, ProfilePage } from './settings/SettingsPages'
 import { GoogleAuthCallback } from './auth/GoogleAuthCallback'
 import VerifyEmailPage from './auth/VerifyEmailPage'
+import CheckoutPage from './checkout/CheckoutPage'
+import PaymentResultPage from './checkout/PaymentResultPage'
 import { adminApi } from './api/admin'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
@@ -593,7 +595,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
 }
 
 function App() {
-  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<ApiPricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/verify-email" element={<VerifyEmailPage />} /><Route path="/auth/google/callback" element={<GoogleAuthCallback />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
+  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<ApiPricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/verify-email" element={<VerifyEmailPage />} /><Route path="/checkout/:planId" element={<CheckoutPage />} /><Route path="/checkout/result" element={<PaymentResultPage />} /><Route path="/auth/google/callback" element={<GoogleAuthCallback />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
 }
 
 function StatusPill({ status }: { status: Server['status'] }) {

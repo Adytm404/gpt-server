@@ -237,6 +237,78 @@ export const adminApi = {
       body: JSON.stringify({ email }),
     })
   },
+  async getDuitkuSettings() {
+    return apiRequest<{
+      merchant_code: string
+      environment: 'sandbox' | 'production'
+      enabled: boolean
+      callback_url: string
+      return_url: string
+      expiry_period_minutes: number
+      has_api_key: boolean
+      updated_at?: string
+    }>('/api/v1/admin/duitku')
+  },
+  async setDuitkuSettings(input: {
+    merchant_code: string
+    api_key?: string
+    environment: 'sandbox' | 'production'
+    enabled: boolean
+    callback_url?: string
+    return_url?: string
+    expiry_period_minutes?: number
+  }) {
+    return apiRequest<{
+      merchant_code: string
+      environment: 'sandbox' | 'production'
+      enabled: boolean
+      callback_url: string
+      return_url: string
+      expiry_period_minutes: number
+      has_api_key: boolean
+      updated_at?: string
+    }>('/api/v1/admin/duitku', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+  async getPublicBillingConfig() {
+    return apiRequest<{
+      duitku_enabled: boolean
+      duitku_environment: 'sandbox' | 'production'
+      merchant_code: string
+    }>('/api/v1/public/billing/config')
+  },
+  async createCheckoutOrder(input: { plan_id: string; billing_period: 'monthly' | 'annual' }) {
+    return apiRequest<{
+      order_id: string
+      merchant_order_id: string
+      reference: string
+      payment_url: string
+      amount_idr: number
+      environment: string
+      plan_name: string
+      billing_period: string
+    }>('/api/v1/billing/checkout', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+  async getOrderStatus(merchantOrderId: string) {
+    return apiRequest<{
+      order_id: string
+      merchant_order_id: string
+      reference: string
+      plan_name: string
+      billing_period: string
+      amount_idr: number
+      status: 'pending' | 'paid' | 'expired' | 'failed'
+      payment_method?: string
+      payment_url: string
+      created_at: string
+      paid_at?: string
+    }>(`/api/v1/billing/orders/status?merchant_order_id=${encodeURIComponent(merchantOrderId)}`)
+  },
 }
 
 export async function listPublicPlans() {
