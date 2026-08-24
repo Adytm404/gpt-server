@@ -195,3 +195,71 @@ it('loads and displays authentication & SMTP settings', async () => {
   expect(screen.getByDisplayValue('DS1234')).toBeInTheDocument()
   expect(screen.getAllByDisplayValue('alerts@domain.com')).toHaveLength(2)
 })
+
+it('loads and displays admin users list', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input)
+    if (url.endsWith('/admin/users')) {
+      return new Response(JSON.stringify({
+        total_users: 1,
+        verified_users: 1,
+        admin_users: 1,
+        users: [{
+          id: 'u-1',
+          full_name: 'Aria Rahman',
+          email: 'aria@northstar.dev',
+          platform_role: 'admin',
+          email_verified: true,
+          workspace_name: 'Northstar Ops',
+          workspace_role: 'owner',
+          plan_name: 'Professional',
+          created_at: '2026-08-20T00:00:00Z',
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+  render(<MemoryRouter initialEntries={['/users']}><AdminConsole /></MemoryRouter>)
+  expect(await screen.findByText('User Management')).toBeInTheDocument()
+  expect(screen.getByText('Aria Rahman')).toBeInTheDocument()
+  expect(screen.getByText('aria@northstar.dev')).toBeInTheDocument()
+  expect(screen.getByText('Northstar Ops')).toBeInTheDocument()
+})
+
+it('loads and displays admin transactions and income', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input)
+    if (url.endsWith('/admin/transactions')) {
+      return new Response(JSON.stringify({
+        total_revenue_idr: 500000,
+        monthly_revenue_idr: 250000,
+        today_revenue_idr: 50000,
+        total_orders: 2,
+        paid_orders: 1,
+        pending_orders: 1,
+        failed_orders: 0,
+        transactions: [{
+          id: 'tx-1',
+          merchant_order_id: 'OPS-999',
+          duitku_reference: 'REF-999',
+          workspace_name: 'Northstar Ops',
+          user_email: 'aria@northstar.dev',
+          user_name: 'Aria Rahman',
+          plan_name: 'Professional',
+          billing_period: 'monthly',
+          amount_idr: 250000,
+          status: 'paid',
+          payment_method: 'QRIS',
+          paid_at: '2026-08-24T00:00:00Z',
+          created_at: '2026-08-24T00:00:00Z',
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+  render(<MemoryRouter initialEntries={['/transactions']}><AdminConsole /></MemoryRouter>)
+  expect(await screen.findByText('Transactions & Income')).toBeInTheDocument()
+  expect(screen.getByText('OPS-999')).toBeInTheDocument()
+  expect(screen.getByText('Total Pemasukan (All Time)')).toBeInTheDocument()
+  expect(screen.getByText('Bulan Ini (Monthly)')).toBeInTheDocument()
+})

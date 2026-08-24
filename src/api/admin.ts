@@ -309,6 +309,50 @@ export const adminApi = {
       paid_at?: string
     }>(`/api/v1/billing/orders/status?merchant_order_id=${encodeURIComponent(merchantOrderId)}`)
   },
+  async getAdminUsers() {
+    return apiRequest<{
+      total_users: number
+      verified_users: number
+      admin_users: number
+      users: Array<{
+        id: string
+        full_name: string
+        email: string
+        platform_role: string
+        email_verified: boolean
+        workspace_name: string
+        workspace_role: string
+        plan_name: string
+        created_at: string
+      }>
+    }>('/api/v1/admin/users')
+  },
+  async getAdminTransactions() {
+    return apiRequest<{
+      total_revenue_idr: number
+      monthly_revenue_idr: number
+      today_revenue_idr: number
+      total_orders: number
+      paid_orders: number
+      pending_orders: number
+      failed_orders: number
+      transactions: Array<{
+        id: string
+        merchant_order_id: string
+        duitku_reference: string
+        workspace_name: string
+        user_email: string
+        user_name: string
+        plan_name: string
+        billing_period: string
+        amount_idr: number
+        status: string
+        payment_method: string
+        paid_at?: string
+        created_at: string
+      }>
+    }>('/api/v1/admin/transactions')
+  },
 }
 
 export async function listPublicPlans() {

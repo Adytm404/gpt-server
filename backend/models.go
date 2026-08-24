@@ -68,6 +68,8 @@ func (s *server) adminRoutes(r chi.Router) {
 	r.With(s.requireMutation).Post("/plans/{id}/duplicate", s.duplicatePlan)
 	r.Get("/plans/{id}/preview", s.previewPlan)
 	r.Get("/history", s.history)
+	r.Get("/users", s.listAdminUsers)
+	r.Get("/transactions", s.listAdminTransactions)
 }
 
 func scanModel(row pgx.Row) (modelResponse, error) {

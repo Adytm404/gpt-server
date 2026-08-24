@@ -91,6 +91,8 @@ export default function AdminConsole() {
         <Route path="plans/new" element={<PlanEditor />} />
         <Route path="plans/:planID" element={<PlanEditor />} />
         <Route path="plans/:planID/preview" element={<PlanPreview />} />
+        <Route path="users" element={<UsersPage />} />
+        <Route path="transactions" element={<TransactionsPage />} />
         <Route path="auth" element={<AuthSettingsPage />} />
         <Route path="history" element={<HistoryPage />} />
         <Route path="*" element={<Navigate to="models" replace />} />
@@ -1931,6 +1933,414 @@ function AuthSettingsPage() {
             </label>
           </div>
         </EditorSection>
+      </section>
+    </main>
+  );
+}
+
+function formatCurrencyIDR(amount: number) {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(amount);
+}
+
+function UsersPage() {
+  const [data, setData] = useState<{
+    total_users: number;
+    verified_users: number;
+    admin_users: number;
+    users: Array<{
+      id: string;
+      full_name: string;
+      email: string;
+      platform_role: string;
+      email_verified: boolean;
+      workspace_name: string;
+      workspace_role: string;
+      plan_name: string;
+      created_at: string;
+    }>;
+  } | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await adminApi.getAdminUsers();
+      setData(res);
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const filteredUsers = (data?.users || []).filter((u) => {
+    const q = search.toLowerCase();
+    return (
+      u.full_name.toLowerCase().includes(q) ||
+      u.email.toLowerCase().includes(q) ||
+      u.workspace_name.toLowerCase().includes(q) ||
+      u.plan_name.toLowerCase().includes(q) ||
+      u.platform_role.toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <main className="admin-page">
+      <PageHead
+        eyebrow="Platform Users"
+        title="User Management"
+        copy="Overview of all registered users, roles, email verification status, and workspace plans."
+        action={
+          <button className="button secondary" onClick={() => void load()} disabled={loading}>
+            Refresh
+          </button>
+        }
+      />
+
+      {error && <div className="inline-api-error" role="alert">{error}</div>}
+
+      {/* Summary KPI Cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginTop: 18 }}>
+        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Total Users
+          </span>
+          <div style={{ fontSize: 28, fontWeight: 750, marginTop: 6, color: "#17171b" }}>
+            {data?.total_users ?? "-"}
+          </div>
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>Registered across platform</small>
+        </div>
+
+        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Verified Accounts
+          </span>
+          <div style={{ fontSize: 28, fontWeight: 750, marginTop: 6, color: "var(--green)" }}>
+            {data?.verified_users ?? "-"}
+          </div>
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>Email activation completed</small>
+        </div>
+
+        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Platform Admins
+          </span>
+          <div style={{ fontSize: 28, fontWeight: 750, marginTop: 6, color: "var(--accent)" }}>
+            {data?.admin_users ?? "-"}
+          </div>
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>Full admin control access</small>
+        </div>
+      </div>
+
+      {/* Search & Filter Toolbar */}
+      <div style={{ marginTop: 22, display: "flex", gap: 12, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: 1, maxWidth: 420 }}>
+          <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
+          <input
+            placeholder="Search users by name, email, workspace, or plan..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ width: "100%", height: 38, paddingLeft: 34, paddingRight: 12, border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, background: "#fff" }}
+          />
+        </div>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>
+          Showing <b>{filteredUsers.length}</b> of {data?.total_users ?? 0} users
+        </span>
+      </div>
+
+      {/* Users Table */}
+      <section style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, marginTop: 14, overflow: "hidden" }}>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center" }}>
+            <span className="tiny-spinner" /> Loading users...
+          </div>
+        ) : filteredUsers.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+            No users match the search criteria.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#fafaf8", borderBottom: "1px solid var(--line)", color: "var(--muted)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.06em" }}>
+                <th style={{ padding: "12px 16px" }}>User</th>
+                <th style={{ padding: "12px 16px" }}>Role</th>
+                <th style={{ padding: "12px 16px" }}>Status</th>
+                <th style={{ padding: "12px 16px" }}>Workspace</th>
+                <th style={{ padding: "12px 16px" }}>Active Plan</th>
+                <th style={{ padding: "12px 16px" }}>Registered</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredUsers.map((u) => (
+                <tr key={u.id} style={{ borderBottom: "1px solid var(--line)" }}>
+                  <td style={{ padding: "12px 16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: u.platform_role === "admin" ? "var(--accent-soft)" : "#f0f0f0", color: u.platform_role === "admin" ? "var(--accent)" : "#555", display: "grid", placeItems: "center", fontWeight: 700, fontSize: 11 }}>
+                        {u.full_name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <b style={{ color: "#17171b", display: "block" }}>{u.full_name}</b>
+                        <small style={{ color: "var(--muted)" }}>{u.email}</small>
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ padding: "12px 16px" }}>
+                    <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: u.platform_role === "admin" ? "var(--accent-soft)" : "#f0f0f0", color: u.platform_role === "admin" ? "var(--accent)" : "#555" }}>
+                      {u.platform_role.toUpperCase()}
+                    </span>
+                  </td>
+                  <td style={{ padding: "12px 16px" }}>
+                    <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 650, background: u.email_verified ? "#f0fff4" : "#fff5f5", color: u.email_verified ? "var(--green)" : "var(--red)", border: `1px solid ${u.email_verified ? "#c6f6d5" : "#fed7d7"}` }}>
+                      {u.email_verified ? "Verified" : "Unverified"}
+                    </span>
+                  </td>
+                  <td style={{ padding: "12px 16px" }}>
+                    <b>{u.workspace_name || "-"}</b>
+                    {u.workspace_role && <small style={{ display: "block", color: "var(--muted)" }}>({u.workspace_role})</small>}
+                  </td>
+                  <td style={{ padding: "12px 16px" }}>
+                    <span style={{ padding: "3px 8px", borderRadius: 6, background: "#f8f8f6", border: "1px solid var(--line)", fontWeight: 600, color: "#17171b" }}>
+                      {u.plan_name}
+                    </span>
+                  </td>
+                  <td style={{ padding: "12px 16px", color: "var(--muted)" }}>
+                    {u.created_at ? new Date(u.created_at).toLocaleDateString() : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function TransactionsPage() {
+  const [data, setData] = useState<{
+    total_revenue_idr: number;
+    monthly_revenue_idr: number;
+    today_revenue_idr: number;
+    total_orders: number;
+    paid_orders: number;
+    pending_orders: number;
+    failed_orders: number;
+    transactions: Array<{
+      id: string;
+      merchant_order_id: string;
+      duitku_reference: string;
+      workspace_name: string;
+      user_email: string;
+      user_name: string;
+      plan_name: string;
+      billing_period: string;
+      amount_idr: number;
+      status: string;
+      payment_method: string;
+      paid_at?: string;
+      created_at: string;
+    }>;
+  } | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await adminApi.getAdminTransactions();
+      setData(res);
+    } catch (caught) {
+      setError(message(caught));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const filteredTx = (data?.transactions || []).filter((t) => {
+    const q = search.toLowerCase();
+    return (
+      t.merchant_order_id.toLowerCase().includes(q) ||
+      t.duitku_reference.toLowerCase().includes(q) ||
+      t.user_email.toLowerCase().includes(q) ||
+      t.user_name.toLowerCase().includes(q) ||
+      t.plan_name.toLowerCase().includes(q) ||
+      t.workspace_name.toLowerCase().includes(q) ||
+      t.status.toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <main className="admin-page">
+      <PageHead
+        eyebrow="Financial & Billing"
+        title="Transactions & Income"
+        copy="Real-time revenue metrics, order history, and payment gateway settlement status."
+        action={
+          <button className="button secondary" onClick={() => void load()} disabled={loading}>
+            Refresh
+          </button>
+        }
+      />
+
+      {error && <div className="inline-api-error" role="alert">{error}</div>}
+
+      {/* Revenue KPI Cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginTop: 18 }}>
+        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Total Pemasukan (All Time)
+          </span>
+          <div style={{ fontSize: 24, fontWeight: 750, marginTop: 6, color: "var(--accent)" }}>
+            {data ? formatCurrencyIDR(data.total_revenue_idr) : "-"}
+          </div>
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>{data?.paid_orders ?? 0} successful orders</small>
+        </div>
+
+        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Bulan Ini (Monthly)
+          </span>
+          <div style={{ fontSize: 24, fontWeight: 750, marginTop: 6, color: "var(--green)" }}>
+            {data ? formatCurrencyIDR(data.monthly_revenue_idr) : "-"}
+          </div>
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>Current calendar month</small>
+        </div>
+
+        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#17171b", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Hari Ini (Today)
+          </span>
+          <div style={{ fontSize: 24, fontWeight: 750, marginTop: 6, color: "#17171b" }}>
+            {data ? formatCurrencyIDR(data.today_revenue_idr) : "-"}
+          </div>
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>Settled today</small>
+        </div>
+
+        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Order Breakdown
+          </span>
+          <div style={{ display: "flex", gap: 10, marginTop: 8, fontSize: 12 }}>
+            <span style={{ color: "var(--green)" }}><b>{data?.paid_orders ?? 0}</b> Paid</span>
+            <span style={{ color: "#b7791f" }}><b>{data?.pending_orders ?? 0}</b> Pending</span>
+            <span style={{ color: "var(--red)" }}><b>{data?.failed_orders ?? 0}</b> Failed</span>
+          </div>
+          <small style={{ color: "var(--muted)", fontSize: 11 }}>Total {data?.total_orders ?? 0} orders created</small>
+        </div>
+      </div>
+
+      {/* Search Toolbar */}
+      <div style={{ marginTop: 22, display: "flex", gap: 12, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: 1, maxWidth: 420 }}>
+          <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
+          <input
+            placeholder="Search by Order ID, Reference, Customer, or Plan..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ width: "100%", height: 38, paddingLeft: 34, paddingRight: 12, border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, background: "#fff" }}
+          />
+        </div>
+        <span style={{ fontSize: 12, color: "var(--muted)" }}>
+          Showing <b>{filteredTx.length}</b> of {data?.total_orders ?? 0} transactions
+        </span>
+      </div>
+
+      {/* Transactions Table */}
+      <section style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, marginTop: 14, overflow: "hidden" }}>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center" }}>
+            <span className="tiny-spinner" /> Loading transactions...
+          </div>
+        ) : filteredTx.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
+            No transactions found.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#fafaf8", borderBottom: "1px solid var(--line)", color: "var(--muted)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.06em" }}>
+                <th style={{ padding: "12px 16px" }}>Order ID / Reference</th>
+                <th style={{ padding: "12px 16px" }}>Customer</th>
+                <th style={{ padding: "12px 16px" }}>Plan & Cycle</th>
+                <th style={{ padding: "12px 16px" }}>Amount (IDR)</th>
+                <th style={{ padding: "12px 16px" }}>Status</th>
+                <th style={{ padding: "12px 16px" }}>Method</th>
+                <th style={{ padding: "12px 16px" }}>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredTx.map((t) => {
+                const isPaid = t.status === "paid";
+                const isPending = t.status === "pending";
+                return (
+                  <tr key={t.id} style={{ borderBottom: "1px solid var(--line)" }}>
+                    <td style={{ padding: "12px 16px" }}>
+                      <b style={{ color: "#17171b", display: "block", fontFamily: "monospace" }}>{t.merchant_order_id}</b>
+                      {t.duitku_reference && (
+                        <small style={{ color: "var(--muted)", fontFamily: "monospace" }}>Ref: {t.duitku_reference}</small>
+                      )}
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <b style={{ color: "#17171b", display: "block" }}>{t.user_name}</b>
+                      <small style={{ color: "var(--muted)" }}>{t.user_email}</small>
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <span style={{ fontWeight: 600, color: "#17171b" }}>{t.plan_name}</span>
+                      <small style={{ display: "block", color: "var(--muted)", textTransform: "capitalize" }}>{t.billing_period}</small>
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <strong style={{ color: isPaid ? "var(--green)" : "#17171b", fontSize: 13 }}>
+                        {formatCurrencyIDR(t.amount_idr)}
+                      </strong>
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <span
+                        style={{
+                          padding: "3px 8px",
+                          borderRadius: 6,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          background: isPaid ? "#f0fff4" : isPending ? "#fefcbf" : "#fff5f5",
+                          color: isPaid ? "var(--green)" : isPending ? "#b7791f" : "var(--red)",
+                          border: `1px solid ${isPaid ? "#c6f6d5" : isPending ? "#fef08a" : "#fed7d7"}`,
+                        }}
+                      >
+                        {t.status}
+                      </span>
+                    </td>
+                    <td style={{ padding: "12px 16px", color: "#555" }}>
+                      {t.payment_method ? <b>{t.payment_method}</b> : "-"}
+                    </td>
+                    <td style={{ padding: "12px 16px", color: "var(--muted)" }}>
+                      <div>{new Date(t.created_at).toLocaleDateString()}</div>
+                      <small>{new Date(t.created_at).toLocaleTimeString()}</small>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </section>
     </main>
   );

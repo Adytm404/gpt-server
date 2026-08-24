@@ -5,7 +5,7 @@ import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, Bell, Bot, Boxes, Check, CheckCircle2,
   ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, Command, Copy, Cpu, Database, Download,
   Eye, EyeOff, FileCode2, Gauge, HardDrive, History, KeyRound, LayoutGrid, ListFilter, LockKeyhole, Mail, MemoryStick,
-  FileClock, Layers3, LogOut, Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
+  CreditCard, FileClock, Layers3, LogOut, Menu, MessageSquare, MoreHorizontal, Paperclip, Play, Plus, Search, Send, Server as ServerIcon,
   Settings, ShieldCheck, Sparkles, Square, Terminal, UserRound, Users, X, Zap,
 } from 'lucide-react'
 import { servers, type Server } from './data'
@@ -94,6 +94,7 @@ const primaryNav = [
   { to: '/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/servers', icon: ServerIcon, label: 'Servers' },
   { to: '/executions', icon: Terminal, label: 'Executions' },
+  { to: '/pricing', icon: CreditCard, label: 'Pricing' },
 ]
 
 function SidebarProfileMenu({
@@ -231,6 +232,8 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
         <NavLink to="/admin/models" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Bot size={18} /><span className="nav-label">Models</span><span className="tooltip">Models</span></NavLink>
         <NavLink to="/admin/workspaces" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Boxes size={18} /><span className="nav-label">Workspaces</span><span className="tooltip">Workspaces</span></NavLink>
         <NavLink to="/admin/plans" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Layers3 size={18} /><span className="nav-label">Plans</span><span className="tooltip">Plans</span></NavLink>
+        <NavLink to="/admin/users" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><Users size={18} /><span className="nav-label">Users</span><span className="tooltip">Users</span></NavLink>
+        <NavLink to="/admin/transactions" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><CreditCard size={18} /><span className="nav-label">Transactions</span><span className="tooltip">Transactions</span></NavLink>
         <NavLink to="/admin/auth" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><KeyRound size={18} /><span className="nav-label">Authentication</span><span className="tooltip">Authentication</span></NavLink>
         <NavLink to="/admin/history" onClick={close} className={({ isActive }) => cn('nav-icon', isActive && 'active')}><FileClock size={18} /><span className="nav-label">Change history</span><span className="tooltip">Change history</span></NavLink>
       </nav>
@@ -452,7 +455,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         setLoading(false)
         return
       }
-      navigate('/chat', { replace: true })
+      navigate(register ? '/pricing' : '/chat', { replace: true })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to complete request')
       setLoading(false)
