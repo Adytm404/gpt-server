@@ -328,7 +328,7 @@ describe('real chat workspace', () => {
   it('shows honest empty server state with redirect popup modal', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => json(String(input).endsWith('/chat/config') ? { configured: true, model_id: 'model-1', monthly_token_limit: 1000, used_tokens: 0 } : String(input).endsWith('/servers') ? { servers: [] } : { threads: [] }))
     renderWithThreads(<ChatHomePage />)
-    expect(await screen.findByRole('dialog', { name: 'No Servers Connected' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'Connect your first server' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Connect Server' })).toHaveAttribute('href', '/dashboard/servers')
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })

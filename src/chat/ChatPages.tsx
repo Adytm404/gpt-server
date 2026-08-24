@@ -1,7 +1,7 @@
 import { createContext, Fragment, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { NavLink, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Clock3, Command, Download, MessageSquare, MoreHorizontal, Play, Plus, Server as ServerIcon, ShieldCheck, Sparkles, Square, Terminal } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronDown, Clock3, Command, Download, KeyRound, MessageSquare, MoreHorizontal, Play, Plus, Server as ServerIcon, ShieldCheck, Sparkles, Square, Terminal, X } from 'lucide-react'
 import { chatApi, operationEventFromMessage, operationEventsUrl, reduceOperationEvents, type ChatConfig, type ChatMessage, type ChatPolicy, type ChatThread, type Operation, type OperationEvent } from '../api/chat'
 import { serversApi, type Server } from '../api/servers'
 import { MarkdownMessage } from './MarkdownMessage'
@@ -513,36 +513,86 @@ export function ChatHomePage() {
       {!loading && showNoServerModal && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="no-server-title">
           <button className="modal-scrim" onClick={() => setShowNoServerModal(false)} aria-label="Close" />
-          <div className="modal-card" style={{ maxWidth: 440, textAlign: 'center' }}>
-            <div className="modal-header" style={{ justifyContent: 'center', paddingBottom: 0 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <div style={{ width: 48, height: 48, borderRadius: 12, background: 'var(--accent-soft)', color: 'var(--accent)', display: 'grid', placeItems: 'center', marginBottom: 12, border: '1px solid #7657ff20' }}>
-                  <ServerIcon size={24} />
-                </div>
-                <span className="page-eyebrow" style={{ color: 'var(--accent)' }}>Infrastructure Required</span>
-                <h2 id="no-server-title" style={{ fontSize: 20, margin: '4px 0 0' }}>No Servers Connected</h2>
+          <div className="modal-card">
+            <div className="modal-header">
+              <div>
+                <span className="page-eyebrow">Infrastructure required</span>
+                <h2 id="no-server-title">Connect your first server</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setShowNoServerModal(false)}
+                aria-label="Close dialog"
+              >
+                <X size={19} />
+              </button>
+            </div>
+
+            <div className="stepper">
+              <div className="step active">
+                <i>1</i>
+                <span>Scope server</span>
+              </div>
+              <div className="step">
+                <i>2</i>
+                <span>SSH verify</span>
+              </div>
+              <div className="step">
+                <i>3</i>
+                <span>AI diagnostic</span>
               </div>
             </div>
-            <div className="modal-body" style={{ padding: '16px 24px 20px' }}>
-              <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-                To start AI diagnostic chats and terminal executions, connect at least one VPS or cloud server to your workspace.
-              </p>
+
+            <div className="modal-body">
+              <div className="connection-result">
+                <div className="success-seal" style={{ background: 'var(--accent-soft)', color: 'var(--accent)', boxShadow: '0 0 0 9px #7657ff14' }}>
+                  <ServerIcon size={25} />
+                </div>
+                <h3>No servers connected</h3>
+                <p>
+                  OpsAI executes all terminal diagnostic commands strictly within your connected VPS or cloud server environments.
+                </p>
+
+                <div className="check-list">
+                  <span>
+                    <Check size={15} /> Approval-first execution
+                  </span>
+                  <span>
+                    <Check size={15} /> Encrypted SSH credentials
+                  </span>
+                  <span>
+                    <Check size={15} /> Real-time health monitoring
+                  </span>
+                  <span>
+                    <Check size={15} /> Automated down alarms
+                  </span>
+                </div>
+
+                <div className="security-note" style={{ marginTop: 18 }}>
+                  <ShieldCheck size={18} />
+                  <span>
+                    <strong>Zero hidden execution</strong>
+                    Add your server with SSH key or password in 30 seconds to begin asking OpsAI operational questions.
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="modal-footer" style={{ justifyContent: 'center', gap: 10, padding: '16px 24px' }}>
+
+            <div className="modal-footer">
               <button
                 type="button"
                 className="button secondary"
                 onClick={() => setShowNoServerModal(false)}
-                style={{ flex: 1 }}
               >
-                Close
+                Dismiss
               </button>
               <NavLink
                 to="/dashboard/servers"
                 className="button dark"
-                style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+                style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}
               >
-                Connect Server
+                Connect Server <ArrowRight size={16} />
               </NavLink>
             </div>
           </div>
