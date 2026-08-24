@@ -1,13 +1,36 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, CheckCircle2, CreditCard, History, KeyRound, Layers3, ShieldCheck, Sparkles, Zap } from 'lucide-react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  CreditCard,
+  History,
+  KeyRound,
+  Layers3,
+  Server as ServerIcon,
+  ShieldCheck,
+  Sparkles,
+  Zap,
+} from 'lucide-react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { listPublicPlans, type Plan } from '../api/admin'
+import { settingsApi, type WorkspaceSubscriptionDTO } from '../api/settings'
 import { useOptionalSession } from '../auth/SessionContext'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
 const formatIDR = (amount: number) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount)
 
-function BrandMark() { return <div className="brand-mark" aria-label="OpsAI"><span /><span /><span /><span /></div> }
+function BrandMark() {
+  return (
+    <div className="brand-mark" aria-label="OpsAI">
+      <span />
+      <span />
+      <span />
+      <span />
+    </div>
+  )
+}
 
 export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' | 'dashboard' }) {
   const location = useLocation()
@@ -21,6 +44,7 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
 
   const [annual, setAnnual] = useState(true)
   const [plans, setPlans] = useState<Plan[]>([])
+  const [subscription, setSubscription] = useState<WorkspaceSubscriptionDTO | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -28,19 +52,28 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
     setLoading(true)
     setError('')
     try {
-      setPlans(await listPublicPlans())
+      if (isDashboard) {
+        const [publicPlans, sub] = await Promise.all([
+          listPublicPlans(),
+          settingsApi.getWorkspaceSubscription().catch(() => null),
+        ])
+        setPlans(publicPlans)
+        setSubscription(sub)
+      } else {
+        setPlans(await listPublicPlans())
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to load plans')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [isDashboard])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  // --- 1. DASHBOARD MODE (Inside Authenticated AppShell) ---
+  // --- 1. DASHBOARD CLIENT MODE (Inside Authenticated AppShell) ---
   if (isDashboard) {
     return (
       <div className="content-page page-enter">
@@ -48,11 +81,39 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
           <div>
             <span className="page-eyebrow">Commercial &amp; Subscriptions</span>
             <h1>Plans &amp; Capacity</h1>
-            <p>Upgrade server concurrency, monthly AI token limits, and continuous diagnostic monitoring.</p>
+            <p>Manage workspace limits, monthly AI tokens, and server concurrency for {session?.workspace?.name || 'your workspace'}.</p>
           </div>
           <div className="billing-toggle" aria-label="Billing period" style={{ margin: 0 }}>
             <button type="button" className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly</button>
-            <button type="button" className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual</button>
+            <button type="button" className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual (Save)</button>
+          </div>
+        </div>
+
+        {/* Workspace Capacity KPI Summary Strip */}
+        <div className="stats-strip three">
+          <div className="mini-stat">
+            <div>
+              <span>Current Active Tier</span>
+              <strong>{subscription?.plan_name || 'Free / Starter'}</strong>
+              <small>{subscription?.has_active_plan ? 'Active Subscription' : 'Starter Limits'}</small>
+            </div>
+            <i><Layers3 size={18} /></i>
+          </div>
+          <div className="mini-stat">
+            <div>
+              <span>Monthly Token Quota</span>
+              <strong>{subscription ? new Intl.NumberFormat('id-ID').format(subscription.monthly_tokens) : '-'}</strong>
+              <small>{subscription ? `${new Intl.NumberFormat('id-ID').format(subscription.used_tokens)} used this month` : 'Token limit'}</small>
+            </div>
+            <i><Sparkles size={18} /></i>
+          </div>
+          <div className="mini-stat">
+            <div>
+              <span>Server Concurrency</span>
+              <strong>Up to {subscription?.max_servers ?? 3}</strong>
+              <small>Simultaneous target hosts</small>
+            </div>
+            <i><ServerIcon size={18} /></i>
           </div>
         </div>
 
@@ -66,33 +127,97 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
         ) : plans.length === 0 ? (
           <div className="api-state">No public subscription plans currently available.</div>
         ) : (
-          <div className="pricing-grid" style={{ marginTop: 24 }}>
+          <div className="dashboard-plan-grid">
             {plans.map((plan, index) => {
               const price = annual ? plan.annualPriceCents : plan.priceCents
+              const isCurrent = subscription?.plan_id === plan.id || subscription?.plan_revision_id === plan.id
+              const isFeatured = index === 1
+
               return (
-                <article className={cn('pricing-card', index === 1 && 'featured')} key={plan.id}>
-                  {index === 1 && <span className="popular-label">Most operational</span>}
-                  <span className="page-eyebrow">Up to {plan.maxServers} servers</span>
-                  <h2>{plan.name}</h2>
-                  <p>{plan.description || 'Enterprise-grade server monitoring and AI incident diagnosis.'}</p>
-                  <div className="plan-price">
+                <article
+                  className={cn(
+                    'dashboard-plan-card',
+                    isFeatured && !isCurrent && 'featured',
+                    isCurrent && 'current'
+                  )}
+                  key={plan.id}
+                >
+                  <div className="dashboard-plan-head">
+                    <div>
+                      <span className="page-eyebrow" style={{ color: isCurrent ? 'var(--green)' : isFeatured ? 'var(--accent)' : 'var(--muted)' }}>
+                        {isCurrent ? 'Current Active Tier' : isFeatured ? 'Recommended' : `Up to ${plan.maxServers} servers`}
+                      </span>
+                      <h3>{plan.name}</h3>
+                    </div>
+                    {isCurrent ? (
+                      <span
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 6,
+                          fontSize: 9,
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          background: '#f0fff4',
+                          color: 'var(--green)',
+                          border: '1px solid #c6f6d5',
+                        }}
+                      >
+                        Active
+                      </span>
+                    ) : isFeatured ? (
+                      <span
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: 6,
+                          fontSize: 9,
+                          fontWeight: 700,
+                          textTransform: 'uppercase',
+                          background: 'var(--accent-soft)',
+                          color: 'var(--accent)',
+                        }}
+                      >
+                        Popular
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <p className="dashboard-plan-desc">
+                    {plan.description || 'Dedicated AI diagnostic capacity, bounded execution, and full terminal log history.'}
+                  </p>
+
+                  <div className="dashboard-plan-price">
                     <strong>{formatIDR(price)}</strong>
                     <small>/ workspace / month</small>
                   </div>
-                  <small className="billing-note">{annual ? 'Billed annually' : 'Billed monthly'}</small>
+                  <span className="plan-period-badge">
+                    {annual ? 'Billed annually via Duitku' : 'Billed monthly via Duitku'}
+                  </span>
 
-                  <NavLink
-                    to={`/checkout/${encodeURIComponent(plan.id)}?period=${annual ? 'annual' : 'monthly'}`}
-                    className={cn('button', index === 1 ? 'accent' : 'secondary')}
-                    style={{ textDecoration: 'none' }}
-                  >
-                    Subscribe to {plan.name} <ArrowRight size={14} />
-                  </NavLink>
+                  <div style={{ marginTop: 6, marginBottom: 4 }}>
+                    {isCurrent ? (
+                      <button
+                        type="button"
+                        className="button secondary"
+                        disabled
+                        style={{ width: '100%', justifyContent: 'center', opacity: 0.8 }}
+                      >
+                        <Check size={14} /> Current active plan
+                      </button>
+                    ) : (
+                      <NavLink
+                        to={`/checkout/${encodeURIComponent(plan.id)}?period=${annual ? 'annual' : 'monthly'}`}
+                        className={cn('button', isFeatured ? 'dark' : 'secondary')}
+                        style={{ width: '100%', justifyContent: 'center', textDecoration: 'none' }}
+                      >
+                        Subscribe to {plan.name} <ArrowRight size={14} />
+                      </NavLink>
+                    )}
+                  </div>
 
-                  <div className="plan-features">
-                    <span>INCLUDED</span>
-                    <p><Check size={13} /> Up to <b>{plan.maxServers} servers</b> connected</p>
-                    <p><Check size={13} /> <b>{new Intl.NumberFormat('id-ID').format(plan.monthlyTokens)}</b> monthly AI tokens</p>
+                  <div className="dashboard-plan-features">
+                    <span>Included Entitlements</span>
+                    <p><Check size={13} /> Up to <b>{plan.maxServers} concurrent servers</b></p>
+                    <p><Check size={13} /> <b>{new Intl.NumberFormat('id-ID').format(plan.monthlyTokens)}</b> monthly tokens</p>
                     {plan.features.map(feature => (
                       <p key={feature}><Check size={13} /> {feature}</p>
                     ))}
@@ -103,20 +228,30 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
           </div>
         )}
 
-        <section className="pricing-trust" style={{ marginTop: 40 }}>
+        {/* Dashboard Security & Guarantee Callout */}
+        <div className="dashboard-trust-strip">
           <div>
-            <ShieldCheck size={20} />
-            <span><b>Approval-first by default</b><small>No hidden command execution on any plan.</small></span>
+            <ShieldCheck size={22} />
+            <div>
+              <b>Approval-first by default</b>
+              <small>Zero hidden command execution on all plans.</small>
+            </div>
           </div>
           <div>
-            <KeyRound size={20} />
-            <span><b>Secure SSH access</b><small>Managed keys and explicit server scope.</small></span>
+            <KeyRound size={22} />
+            <div>
+              <b>Secure SSH access</b>
+              <small>Strict key authentication and scoped commands.</small>
+            </div>
           </div>
           <div>
-            <History size={20} />
-            <span><b>Duitku POP Payment Gateway</b><small>Instant activation via QRIS, VA, &amp; E-Wallet.</small></span>
+            <CreditCard size={22} />
+            <div>
+              <b>Duitku POP Payment Gateway</b>
+              <small>Instant activation via QRIS, Virtual Account, &amp; E-Wallet.</small>
+            </div>
           </div>
-        </section>
+        </div>
       </div>
     )
   }
@@ -127,7 +262,7 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
       <div className="landing-page pricing-page" style={{ minHeight: '100vh', background: '#f8f8f6' }}>
         <nav className="landing-nav">
           <NavLink to="/" className="landing-brand"><BrandMark /><span>OpsAI</span></NavLink>
-          <NavLink to="/chat" className="button secondary compact">Skip to workspace <ArrowRight size={14} /></NavLink>
+          <NavLink to="/dashboard/chat" className="button secondary compact">Skip to workspace <ArrowRight size={14} /></NavLink>
         </nav>
 
         <main>
@@ -186,7 +321,7 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
           )}
 
           <div style={{ textAlign: 'center', marginTop: 30, marginBottom: 60 }}>
-            <NavLink to="/chat" style={{ color: 'var(--muted)', fontSize: 13, textDecoration: 'underline' }}>
+            <NavLink to="/dashboard/chat" style={{ color: 'var(--muted)', fontSize: 13, textDecoration: 'underline' }}>
               I want to explore with basic starter features first &rarr;
             </NavLink>
           </div>
@@ -204,7 +339,7 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
           <NavLink to="/">Product</NavLink>
           <NavLink to="/pricing" className="active">Pricing</NavLink>
         </div>
-        <NavLink to="/chat" className="button dark">Open workspace <ArrowRight size={15} /></NavLink>
+        <NavLink to="/dashboard/chat" className="button dark">Open workspace <ArrowRight size={15} /></NavLink>
       </nav>
 
       <main>
