@@ -115,7 +115,7 @@ SELECT
   COUNT(*),
   COUNT(CASE WHEN status = 'paid' THEN 1 END),
   COUNT(CASE WHEN status = 'pending' THEN 1 END),
-  COUNT(CASE WHEN status IN ('failed', 'expired') THEN 1 END)
+  COUNT(CASE WHEN status IN ('failed', 'expired', 'cancelled', 'canceled') THEN 1 END)
 FROM workspace_orders`).Scan(&totalRevenue, &monthlyRevenue, &todayRevenue, &totalOrders, &paidOrders, &pendingOrders, &failedOrders)
 
 	rows, err := s.db.Query(r.Context(), `

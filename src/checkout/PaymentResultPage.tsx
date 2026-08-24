@@ -45,7 +45,7 @@ export default function PaymentResultPage() {
     plan_name: string;
     billing_period: string;
     amount_idr: number;
-    status: "pending" | "paid" | "expired" | "failed";
+    status: "pending" | "paid" | "expired" | "failed" | "cancelled" | "canceled";
     payment_method?: string;
     payment_url: string;
     created_at: string;
@@ -129,17 +129,19 @@ export default function PaymentResultPage() {
           ) : order ? (
             <>
               <span className="page-eyebrow" style={{ color: isPaid ? "var(--green)" : isPending ? "#b7791f" : "var(--red)" }}>
-                {isPaid ? "Payment Verified" : isPending ? "Awaiting Payment" : "Transaction Incomplete"}
+                {isPaid ? "Payment Verified" : isPending ? "Awaiting Payment" : order.status === "cancelled" || order.status === "canceled" ? "Order Cancelled" : "Transaction Incomplete"}
               </span>
               <h1 style={{ fontSize: 30, margin: "6px 0 10px", color: "#17171b" }}>
-                {isPaid ? "Subscription Active!" : isPending ? "Payment in Progress" : "Payment Failed"}
+                {isPaid ? "Subscription Active!" : isPending ? "Payment in Progress" : order.status === "cancelled" || order.status === "canceled" ? "Order Cancelled" : "Payment Failed"}
               </h1>
               <p style={{ color: "var(--muted)", fontSize: 13, lineHeight: 1.5, margin: "0 0 20px" }}>
                 {isPaid
                   ? `Your workspace has been upgraded to ${order.plan_name}. All server capacity and AI quotas are now active.`
                   : isPending
                   ? "We are awaiting notification from your bank or e-wallet. This page updates automatically once verified."
-                  : "The transaction was cancelled or expired. You can initiate a new checkout anytime."}
+                  : order.status === "cancelled" || order.status === "canceled"
+                  ? "This invoice was not paid within the 60-minute window and has been automatically cancelled."
+                  : "The transaction encountered an issue or expired. You can initiate a new checkout anytime."}
               </p>
 
               <div

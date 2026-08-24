@@ -137,6 +137,7 @@ func main() {
 
 	s := &server{db: db, cfg: cfg, limiter: newLoginLimiter(10, time.Minute), planningLimiter: newPlanningLimiter(20, 5*time.Minute), planningLocks: make(map[uuid.UUID]*sync.Mutex), operationCancels: make(map[uuid.UUID]context.CancelFunc), sseStreams: make(map[string]int)}
 	s.startServerMonitoringWorker(context.Background())
+	s.startOrderExpiryWorker(context.Background())
 	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer recoveryCancel()
 	if err := s.failStaleOperations(recoveryCtx); err != nil {

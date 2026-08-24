@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -70,4 +71,10 @@ func TestDuitkuCallbackRejectsBadMerchant(t *testing.T) {
 	if rec.Code == http.StatusOK {
 		t.Fatalf("expected error status for unconfigured callback, got 200")
 	}
+}
+
+func TestExpireOldPendingOrdersNilSafe(t *testing.T) {
+	s := &server{}
+	// Should execute gracefully without panic
+	s.expireOldPendingOrders(context.Background())
 }

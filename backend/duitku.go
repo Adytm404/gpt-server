@@ -540,6 +540,12 @@ WHERE o.merchant_order_id = $1`, merchantOrderID).
 		return
 	}
 
+	// Auto-cancel if order is older than 60 minutes
+	if status == "pending" && time.Since(createdAt) >= 60*time.Minute {
+		_, _ = s.db.Exec(r.Context(), `UPDATE workspace_orders SET status = 'cancelled', updated_at = now() WHERE id = $1 AND status = 'pending'`, orderID)
+		status = "cancelled"
+	}
+
 	// Active sync with Duitku if currently pending
 	if status == "pending" {
 		settings, apiKey, loadErr := s.loadDuitkuSettings(r.Context())
@@ -578,8 +584,8 @@ ON CONFLICT (workspace_id) DO UPDATE SET
 					paidAt = &now
 				}
 			} else if duitkuStatus == "02" {
-				_, _ = s.db.Exec(r.Context(), `UPDATE workspace_orders SET status = 'failed', updated_at = now() WHERE id = $1`, orderID)
-				status = "failed"
+				_, _ = s.db.Exec(r.Context(), `UPDATE workspace_orders SET status = 'cancelled', updated_at = now() WHERE id = $1`, orderID)
+				status = "cancelled"
 			}
 		}
 	}
@@ -646,4 +652,41 @@ func (s *server) checkDuitkuTransactionStatus(ctx context.Context, settings plat
 		return "00", true
 	}
 	return duitkuStatus.StatusCode, false
+}
+
+func (s *server) startOrderExpiryWorker(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		// Initial check after 5 seconds
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+			s.expireOldPendingOrders(ctx)
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.expireOldPendingOrders(ctx)
+			}
+		}
+	}()
+}
+
+func (s *server) expireOldPendingOrders(ctx context.Context) {
+	if s == nil || s.db == nil {
+		return
+	}
+	// Cancel pending orders older than 60 minutes
+	_, err := s.db.Exec(ctx, `
+UPDATE workspace_orders
+SET status = 'cancelled', updated_at = now()
+WHERE status = 'pending' AND created_at < now() - interval '60 minutes'`)
+	if err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("failed to auto-expire old pending orders: %v", err)
+	}
 }

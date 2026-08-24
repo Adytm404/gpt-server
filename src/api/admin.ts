@@ -302,7 +302,7 @@ export const adminApi = {
       plan_name: string
       billing_period: string
       amount_idr: number
-      status: 'pending' | 'paid' | 'expired' | 'failed'
+      status: 'pending' | 'paid' | 'expired' | 'failed' | 'cancelled' | 'canceled'
       payment_method?: string
       payment_url: string
       created_at: string
