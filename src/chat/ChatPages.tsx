@@ -506,12 +506,12 @@ export function ChatHomePage() {
                   <ServerIcon size={24} />
                 </div>
                 <span className="page-eyebrow" style={{ color: 'var(--accent)' }}>Infrastructure Required</span>
-                <h2 id="no-server-title" style={{ fontSize: 20, margin: '4px 0 0' }}>Belum Ada Server Tersimpan</h2>
+                <h2 id="no-server-title" style={{ fontSize: 20, margin: '4px 0 0' }}>No Servers Connected</h2>
               </div>
             </div>
             <div className="modal-body" style={{ padding: '16px 24px 20px' }}>
               <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-                Untuk memulai AI chat diagnosis dan eksekusi perintah terminal, Anda perlu menghubungkan setidaknya satu server VPS/cloud ke workspace Anda.
+                To start AI diagnostic chats and terminal executions, connect at least one VPS or cloud server to your workspace.
               </p>
             </div>
             <div className="modal-footer" style={{ justifyContent: 'center', gap: 10, padding: '16px 24px' }}>
@@ -521,14 +521,14 @@ export function ChatHomePage() {
                 onClick={() => setShowNoServerModal(false)}
                 style={{ flex: 1 }}
               >
-                Tutup
+                Close
               </button>
               <NavLink
                 to="/dashboard/servers"
                 className="button dark"
                 style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
               >
-                Tambah Server
+                Connect Server
               </NavLink>
             </div>
           </div>
