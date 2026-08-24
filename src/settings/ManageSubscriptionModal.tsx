@@ -184,7 +184,7 @@ export default function ManageSubscriptionModal({ close }: { close: () => void }
                     className="button dark compact"
                     onClick={() => {
                       close();
-                      navigate("/pricing");
+                      navigate("/dashboard/pricing");
                     }}
                     style={{ fontSize: 11 }}
                   >

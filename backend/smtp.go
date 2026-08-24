@@ -398,6 +398,57 @@ VALUES ($1, $2, $3, $4)`, tokenID, userID, hash[:], expiresAt)
 	return nil
 }
 
+func (s *server) createAndSendPasswordResetEmail(ctx context.Context, userID uuid.UUID, recipientEmail, recipientName string) error {
+	settings, password, err := s.loadSMTPSettings(ctx)
+	if err != nil || !settings.Enabled {
+		return nil
+	}
+
+	rawTokenBytes := make([]byte, 32)
+	if _, err := rand.Read(rawTokenBytes); err != nil {
+		return err
+	}
+	rawToken := hex.EncodeToString(rawTokenBytes)
+	hash := sha256.Sum256([]byte(rawToken))
+
+	tokenID := uuid.New()
+	expiresAt := time.Now().Add(1 * time.Hour)
+
+	_, err = s.db.Exec(ctx, `
+INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
+VALUES ($1, $2, $3, $4)`, tokenID, userID, hash[:], expiresAt)
+	if err != nil {
+		return err
+	}
+
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.cfg.frontendOrigin, rawToken)
+	subject := "Reset your OpsAI password"
+	htmlBody := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<body style="font-family: sans-serif; line-height: 1.6; color: #17171b; max-width: 540px; margin: 0 auto; padding: 30px 20px;">
+  <div style="margin-bottom: 24px;">
+    <h1 style="font-size: 24px; color: #17171b; margin: 0 0 8px;">Password Reset Request</h1>
+    <p style="color: #72727c; font-size: 14px; margin: 0;">Hello %s, we received a request to reset your password for OpsAI.</p>
+  </div>
+  <div style="padding: 24px; background: #f8f8f6; border: 1px solid #e7e7e3; border-radius: 12px; margin: 24px 0; text-align: center;">
+    <a href="%s" style="display: inline-block; padding: 12px 28px; background: #7657ff; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">Reset Password</a>
+  </div>
+  <p style="font-size: 12px; color: #72727c;">Or copy and paste this link in your browser:<br /><a href="%s" style="color: #7657ff;">%s</a></p>
+  <p style="font-size: 12px; color: #72727c; margin-top: 20px;">This link will expire in 1 hour. If you didn't request a password reset, you can safely ignore this email.</p>
+  <hr style="border: none; border-top: 1px solid #e7e7e3; margin: 24px 0;" />
+  <small style="color: #aaaab0; font-size: 11px;">OpsAI Infrastructure Control Plane</small>
+</body>
+</html>`, recipientName, resetURL, resetURL, resetURL)
+
+	go func() {
+		if err := sendEmailDirect(settings, password, recipientEmail, subject, htmlBody); err != nil {
+			log.Printf("failed to send password reset email to %s: %v", recipientEmail, err)
+		}
+	}()
+
+	return nil
+}
+
 func (s *server) sendServerDownAlarm(ctx context.Context, serverName, serverHost string, serverPort int, failureReason string, recipients []string) {
 	settings, password, err := s.loadSMTPSettings(ctx)
 	if err != nil || !settings.Enabled || len(recipients) == 0 {

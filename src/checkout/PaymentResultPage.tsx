@@ -123,7 +123,7 @@ export default function PaymentResultPage() {
               <span className="page-eyebrow" style={{ color: "var(--red)" }}>Order not found</span>
               <h1 style={{ fontSize: 30, margin: "6px 0 10px" }}>Unable to find order</h1>
               <p style={{ color: "var(--red)", fontSize: 13, marginBottom: 20 }}>{error}</p>
-              <NavLink to="/chat" className="button dark auth-submit" style={{ textDecoration: "none" }}>
+              <NavLink to="/dashboard/chat" className="button dark auth-submit" style={{ textDecoration: "none" }}>
                 Return to Workspace
               </NavLink>
             </>

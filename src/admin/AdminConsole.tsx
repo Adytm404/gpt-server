@@ -845,8 +845,8 @@ function PlanEditor() {
       notify("Draft saved");
       navigate(
         openPreview
-          ? `/admin/plans/${saved.id}/preview`
-          : `/admin/plans/${saved.id}`,
+          ? `/dashboard/admin/plans/${saved.id}/preview`
+          : `/dashboard/admin/plans/${saved.id}`,
         { replace: true },
       );
     } catch (caught) {

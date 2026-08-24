@@ -85,3 +85,37 @@ func TestAdminSMTPRequiresAdmin(t *testing.T) {
 		t.Fatalf("expected 403 for non-admin user on /admin/smtp, got %d", rec.Code)
 	}
 }
+
+func TestForgotPasswordValidation(t *testing.T) {
+	s := &server{cfg: config{frontendOrigin: "https://app.example.com"}, limiter: newLoginLimiter(10, time.Minute)}
+	handler := s.routes()
+
+	// Missing email
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/forgot-password", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty email, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestResetPasswordValidation(t *testing.T) {
+	s := &server{cfg: config{frontendOrigin: "https://app.example.com"}, limiter: newLoginLimiter(10, time.Minute)}
+	handler := s.routes()
+
+	// Missing token
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/reset-password", strings.NewReader(`{"password":"validpassword123"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty token, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Password too short (<12)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/reset-password", strings.NewReader(`{"token":"sometoken","password":"short"}`))
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for short password, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+}

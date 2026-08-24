@@ -157,11 +157,11 @@ export default function CheckoutPage() {
   return (
     <div className="landing-page" style={{ minHeight: "100vh", background: "#f8f8f6" }}>
       <nav className="landing-nav" style={{ maxWidth: 1080, margin: "0 auto", padding: "18px 24px" }}>
-        <NavLink to="/pricing" className="landing-brand" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <NavLink to="/dashboard/pricing" className="landing-brand" style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <BrandMark />
           <span>OpsAI</span>
         </NavLink>
-        <NavLink to="/pricing" className="button secondary compact" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <NavLink to="/dashboard/pricing" className="button secondary compact" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <ArrowLeft size={13} /> Back to Pricing
         </NavLink>
       </nav>

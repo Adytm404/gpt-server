@@ -205,9 +205,9 @@ export function RecentChats() {
 export function WorkspaceAIUsage({ admin }: { admin: boolean }) {
   const { config, configLoading, configError } = useChatThreads()
   if (configLoading || configError) return null
-  if (!config?.configured) return <div className="sidebar-plan"><div><span><Sparkles size={13} /> Workspace AI</span><b>Disabled</b></div><p>No active model or token quota.</p>{admin && <NavLink to="/admin/workspaces">Configure workspace</NavLink>}</div>
+  if (!config?.configured) return <div className="sidebar-plan"><div><span><Sparkles size={13} /> Workspace AI</span><b>Disabled</b></div><p>No active model or token quota.</p>{admin && <NavLink to="/dashboard/admin/workspaces">Configure workspace</NavLink>}</div>
   const percent = config.monthlyTokenLimit > 0 ? Math.min(100, Math.round(config.usedTokens / config.monthlyTokenLimit * 100)) : 0
-  return <div className="sidebar-plan"><div><span><Sparkles size={13} /> {config.modelName || 'Workspace AI'}</span><b>{percent}% used</b></div><i><b style={{ width: `${percent}%` }} /></i><p>{config.usedTokens.toLocaleString()} of {config.monthlyTokenLimit.toLocaleString()} tokens</p>{admin && <NavLink to="/admin/workspaces">Manage AI routing</NavLink>}</div>
+  return <div className="sidebar-plan"><div><span><Sparkles size={13} /> {config.modelName || 'Workspace AI'}</span><b>{percent}% used</b></div><i><b style={{ width: `${percent}%` }} /></i><p>{config.usedTokens.toLocaleString()} of {config.monthlyTokenLimit.toLocaleString()} tokens</p>{admin && <NavLink to="/dashboard/admin/workspaces">Manage AI routing</NavLink>}</div>
 }
 
 function ServerPicker({ servers, value, onChange }: { servers: Server[]; value: string; onChange: (value: string) => void }) {

@@ -28,7 +28,7 @@ export function GoogleAuthCallback() {
       .handleGoogleCallback(code, state)
       .then(async () => {
         await refresh()
-        navigate('/chat', { replace: true })
+        navigate('/dashboard/chat', { replace: true })
       })
       .catch(caught => {
         setError(caught instanceof Error ? caught.message : 'Google authentication failed')

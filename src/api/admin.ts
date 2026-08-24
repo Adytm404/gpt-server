@@ -237,6 +237,18 @@ export const adminApi = {
       body: JSON.stringify({ email }),
     })
   },
+  async forgotPassword(email: string) {
+    return apiRequest<{ success: boolean; message: string }>('/api/v1/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+  },
+  async resetPassword(token: string, password: string) {
+    return apiRequest<{ success: boolean; message: string }>('/api/v1/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
+    })
+  },
   async getDuitkuSettings() {
     return apiRequest<{
       merchant_code: string

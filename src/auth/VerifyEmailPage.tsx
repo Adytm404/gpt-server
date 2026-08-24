@@ -105,9 +105,9 @@ export default function VerifyEmailPage() {
                 <button
                   className="button dark auth-submit"
                   style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-                  onClick={() => navigate("/pricing?mode=onboarding")}
+                  onClick={() => navigate("/login", { state: { from: "/dashboard/pricing?mode=onboarding" } })}
                 >
-                  Select Plan &amp; Get Started <ArrowRight size={14} />
+                  Sign In &amp; Select Plan <ArrowRight size={14} />
                 </button>
                 <button
                   type="button"

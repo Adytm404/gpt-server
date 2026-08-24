@@ -268,6 +268,8 @@ func (s *server) routes() http.Handler {
 		r.Post("/auth/logout", s.requireOrigin(s.logout))
 		r.Post("/auth/verify-email", s.verifyEmail)
 		r.Post("/auth/resend-verification", s.resendVerification)
+		r.Post("/auth/forgot-password", s.forgotPassword)
+		r.Post("/auth/reset-password", s.resetPassword)
 		r.Get("/auth/providers", s.getPublicAuthProviders)
 		r.Get("/auth/google/url", s.getGoogleAuthURL)
 		r.Post("/auth/google/callback", s.handleGoogleCallback)
@@ -578,6 +580,137 @@ func (s *server) resendVerification(w http.ResponseWriter, r *http.Request) {
 
 	_ = s.createAndSendVerificationEmail(r.Context(), userID, email, fullName)
 	s.writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Verification link sent! Please check your inbox."})
+}
+
+type forgotPasswordInput struct {
+	Email string `json:"email"`
+}
+
+func (s *server) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow(clientIP(r), time.Now()) {
+		s.writeError(w, r, http.StatusTooManyRequests, "too many requests, please try again later")
+		return
+	}
+
+	var in forgotPasswordInput
+	if err := decodeJSON(r, &in); err != nil || strings.TrimSpace(in.Email) == "" {
+		s.writeError(w, r, http.StatusBadRequest, "valid email is required")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	var userID uuid.UUID
+	var fullName string
+	var isSuspended bool
+	err := s.db.QueryRow(r.Context(), `SELECT id, full_name, COALESCE(is_suspended, false) FROM users WHERE lower(email) = $1`, email).Scan(&userID, &fullName, &isSuspended)
+	if err != nil || isSuspended {
+		// Generic success to prevent user enumeration
+		s.writeJSON(w, http.StatusOK, map[string]any{
+			"success": true,
+			"message": "If an active account exists for this email, password reset instructions have been sent.",
+		})
+		return
+	}
+
+	_ = s.createAndSendPasswordResetEmail(r.Context(), userID, email, fullName)
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "If an active account exists for this email, password reset instructions have been sent.",
+	})
+}
+
+type resetPasswordInput struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+func (s *server) resetPassword(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow(clientIP(r), time.Now()) {
+		s.writeError(w, r, http.StatusTooManyRequests, "too many requests, please try again later")
+		return
+	}
+
+	var in resetPasswordInput
+	if err := decodeJSON(r, &in); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	rawToken := strings.TrimSpace(in.Token)
+	if rawToken == "" {
+		s.writeError(w, r, http.StatusBadRequest, "reset token is required")
+		return
+	}
+	if len(in.Password) < 12 || len(in.Password) > 1024 {
+		s.writeError(w, r, http.StatusBadRequest, "password must be between 12 and 1024 characters")
+		return
+	}
+
+	hash := sha256.Sum256([]byte(rawToken))
+
+	var tokenID, userID uuid.UUID
+	var expiresAt time.Time
+	err := s.db.QueryRow(r.Context(), `
+SELECT id, user_id, expires_at
+FROM password_reset_tokens
+WHERE token_hash = $1`, hash[:]).Scan(&tokenID, &userID, &expiresAt)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.writeError(w, r, http.StatusBadRequest, "invalid or expired password reset link")
+			return
+		}
+		s.dbError(w, r, err)
+		return
+	}
+
+	if time.Now().After(expiresAt) {
+		_, _ = s.db.Exec(r.Context(), `DELETE FROM password_reset_tokens WHERE id = $1`, tokenID)
+		s.writeError(w, r, http.StatusBadRequest, "password reset link has expired. please request a new one.")
+		return
+	}
+
+	passwordHash, err := hashPassword(in.Password)
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Update user password & ensure email is verified
+	_, err = tx.Exec(r.Context(), `
+UPDATE users
+SET password_hash = $1, email_verified = true, updated_at = now()
+WHERE id = $2`, passwordHash, userID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	// Delete all active sessions for security (forces re-login with new password)
+	_, _ = tx.Exec(r.Context(), `DELETE FROM sessions WHERE user_id = $1`, userID)
+
+	// Invalidate all reset tokens for this user
+	_, _ = tx.Exec(r.Context(), `DELETE FROM password_reset_tokens WHERE user_id = $1`, userID)
+
+	_ = insertAudit(r.Context(), tx, userID, "user", "Password reset successfully completed", uuid.Nil, "reset-password", nil)
+
+	if err = tx.Commit(r.Context()); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"message": "Password has been reset successfully. You can now sign in with your new password.",
+	})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,7 @@ import { SettingsPage, ProfilePage } from './settings/SettingsPages'
 import ManageSubscriptionModal from './settings/ManageSubscriptionModal'
 import { GoogleAuthCallback } from './auth/GoogleAuthCallback'
 import VerifyEmailPage from './auth/VerifyEmailPage'
+import { ForgotPasswordPage, ResetPasswordPage } from './auth/PasswordResetPages'
 import CheckoutPage from './checkout/CheckoutPage'
 import PaymentResultPage from './checkout/PaymentResultPage'
 import { adminApi } from './api/admin'
@@ -396,17 +397,12 @@ function LandingPage() {
 }
 
 function LegacyPricingPage() {
-  const [annual, setAnnual] = useState(true)
-  const plans = [
-    { name: 'Operator', eyebrow: 'For solo builders', monthly: 19, annual: 15, description: 'Essential AI operations for a focused server stack.', features: ['3 connected servers', '150 AI operations / month', 'Approval-first execution', '7-day execution history', 'Community support'] },
-    { name: 'Control', eyebrow: 'For production teams', monthly: 59, annual: 47, description: 'Shared control and deeper visibility for live infrastructure.', features: ['15 connected servers', '1,000 AI operations / month', 'Team approval policies', '90-day execution history', 'Priority support'], featured: true },
-    { name: 'Fleet', eyebrow: 'For growing platforms', monthly: 149, annual: 119, description: 'Governed operations across larger fleets and environments.', features: ['Unlimited connected servers', '5,000 AI operations / month', 'Custom roles and policies', 'One-year audit retention', 'Dedicated onboarding'] },
-  ]
-  return <div className="landing-page pricing-page"><nav className="landing-nav"><NavLink to="/" className="landing-brand"><BrandMark /><span>OpsAI</span></NavLink><div className="landing-links"><NavLink to="/">Product</NavLink><NavLink to="/pricing" className="active">Pricing</NavLink></div><NavLink to="/chat" className="button dark">Open workspace <ArrowRight size={15} /></NavLink></nav><main><section className="pricing-hero"><div className="landing-grid" /><div className="eyebrow"><span className="live-dot" /> Simple, operational pricing</div><h1>Control every server.<br /><em>Scale when ready.</em></h1><p>Start with enough capacity to operate confidently. Upgrade as your infrastructure and team grow.</p><div className="billing-toggle" aria-label="Billing period"><button className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly</button><button className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual <span>save 20%</span></button></div></section><section className="pricing-grid">{plans.map(plan => <article className={cn('pricing-card', plan.featured && 'featured')} key={plan.name}>{plan.featured && <span className="popular-label">Most operational</span>}<span className="page-eyebrow">{plan.eyebrow}</span><h2>{plan.name}</h2><p>{plan.description}</p><div className="plan-price"><span>$</span><strong>{annual ? plan.annual : plan.monthly}</strong><small>/ user / month</small></div><small className="billing-note">{annual ? 'Billed annually' : 'Billed monthly'}</small><NavLink to="/chat" className={cn('button', plan.featured ? 'accent' : 'secondary')}>Start with {plan.name} <ArrowRight size={14} /></NavLink><div className="plan-features"><span>INCLUDED</span>{plan.features.map(feature => <p key={feature}><Check size={13} /> {feature}</p>)}</div></article>)}</section><section className="pricing-trust"><div><ShieldCheck size={20} /><span><b>Approval-first by default</b><small>No hidden command execution on any plan.</small></span></div><div><KeyRound size={20} /><span><b>Encrypted SSH access</b><small>Passwords never become reusable credentials.</small></span></div><div><Zap size={20} /><span><b>Change plans anytime</b><small>No migration or server reconnection required.</small></span></div></section><section className="pricing-faq"><div><span className="page-eyebrow">Pricing notes</span><h2>Questions before<br />you connect?</h2></div><div>{[['What counts as an AI operation?', 'One approved execution plan counts as one operation, regardless of how many read-only commands it contains.'], ['Can I try OpsAI before paying?', 'Yes. Every workspace starts with a 14-day Control trial and requires no credit card.'], ['Are failed executions charged?', 'No. Connection failures and plans stopped before command execution do not consume usage.'], ['Do you offer custom enterprise terms?', 'Yes. SSO, custom retention, private networking, and volume usage are available by agreement.']].map(([question, answer]) => <details key={question}><summary>{question}<Plus size={15} /></summary><p>{answer}</p></details>)}</div></section><section className="landing-cta pricing-cta"><span className="page-eyebrow">14 days / no credit card</span><h2>Operate with clarity.</h2><p>Connect a server and run your first approved health check.</p><NavLink to="/chat" className="button dark">Start free trial <ArrowRight size={16} /></NavLink></section></main><footer className="landing-footer"><div className="landing-brand"><BrandMark /><span>OpsAI</span></div><p>Human-approved infrastructure operations.</p><span>PRICES IN USD / TAX EXCLUDED</span></footer></div>
+  return <Navigate to="/pricing" replace />
 }
 
 function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const navigate = useNavigate()
+  const location = useLocation()
   const register = mode === 'register'
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -480,7 +476,8 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         setLoading(false)
         return
       }
-      navigate(register ? '/dashboard/pricing?mode=onboarding' : '/dashboard/chat', { replace: true })
+      const target = (location.state as { from?: string })?.from || (register ? '/dashboard/pricing?mode=onboarding' : '/dashboard/chat')
+      navigate(target, { replace: true })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to complete request')
       setLoading(false)
@@ -592,7 +589,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         </>}
         <label className="auth-field"><span>Email address</span><div><Mail size={15} /><input required type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@company.com" autoComplete="email" /></div></label>
         <label className="auth-field"><span>Password <small>12+ characters</small></span><div><LockKeyhole size={15} /><input required minLength={12} type={showPassword ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter your password" autoComplete={register ? 'new-password' : 'current-password'} /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button></div></label>
-        {!register && <div className="auth-options"><label><input type="checkbox" defaultChecked /> Keep me signed in</label><button type="button" onClick={() => openDemo('reset', 'Reset password', 'Password reset is a visual demo.')}>Forgot password?</button></div>}
+        {!register && <div className="auth-options"><label><input type="checkbox" defaultChecked /> Keep me signed in</label><NavLink to="/forgot-password" style={{ color: 'var(--muted)', fontSize: 12, textDecoration: 'none' }}>Forgot password?</NavLink></div>}
         {register && <label className="auth-consent"><input required type="checkbox" /> I agree to the Terms of Service and acknowledge the Privacy Policy.</label>}
         {error && (
           <div className="auth-error" role="alert" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
@@ -629,6 +626,8 @@ function App() {
     <Route path="/login" element={<AuthPage mode="login" />} />
     <Route path="/register" element={<AuthPage mode="register" />} />
     <Route path="/verify-email" element={<VerifyEmailPage />} />
+    <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+    <Route path="/reset-password" element={<ResetPasswordPage />} />
     <Route path="/checkout/:planId" element={<CheckoutPage />} />
     <Route path="/checkout/result" element={<PaymentResultPage />} />
     <Route path="/auth/google/callback" element={<GoogleAuthCallback />} />
@@ -707,7 +706,7 @@ function Composer({ compact = false, initialServer = 'production-api' }: { compa
     if (!prompt.trim()) return
     const params = new URLSearchParams({ prompt: prompt.trim(), server, policy })
     if (attachment) params.set('attachment', attachment)
-    navigate(`/chat/diagnose?${params}`)
+    navigate(`/dashboard/chat/diagnose?${params}`)
   }
   return <div className={cn('composer', compact && 'compact-composer')}>
     {!compact && !prompt && !focused && <div className="composer-preview" aria-hidden="true"><span>{preview}</span><i /></div>}
@@ -756,7 +755,7 @@ function ServersPage() {
 
 function ServerRow({ server }: { server: Server }) {
   const navigate = useNavigate()
-  return <button className="server-row" onClick={() => navigate(`/servers/${server.id}`)}><span className="server-identity"><i className={cn('server-glyph', server.status.toLowerCase())}><ServerIcon size={18} /></i><span><strong>{server.name}</strong><small>{server.host} / {server.region}</small></span></span><span><b className={cn('env-tag', server.environment.toLowerCase())}>{server.environment}</b></span><span className="resource-bars"><MetricBar label="CPU" value={server.cpu} /><MetricBar label="MEM" value={server.memory} /></span><StatusPill status={server.status} /><ChevronRight size={17} /></button>
+  return <button className="server-row" onClick={() => navigate(`/dashboard/servers/${server.id}`)}><span className="server-identity"><i className={cn('server-glyph', server.status.toLowerCase())}><ServerIcon size={18} /></i><span><strong>{server.name}</strong><small>{server.host} / {server.region}</small></span></span><span><b className={cn('env-tag', server.environment.toLowerCase())}>{server.environment}</b></span><span className="resource-bars"><MetricBar label="CPU" value={server.cpu} /><MetricBar label="MEM" value={server.memory} /></span><StatusPill status={server.status} /><ChevronRight size={17} /></button>
 }
 
 function MetricBar({ label, value }: { label: string; value: number }) {
@@ -818,8 +817,8 @@ function ServerDetailPage() {
   const [checking, setChecking] = useState(false)
   const [serviceMenu, setServiceMenu] = useState('')
   const runCheck = () => { setChecking(true); window.setTimeout(() => { setChecking(false); showToast('Health check completed: all systems operational') }, 1300) }
-  return <div className="content-page server-detail-page page-enter"><button className="back-link" onClick={() => navigate('/servers')}><ArrowLeft size={15} /> All servers</button>
-    <section className="server-overview-card"><div className="server-detail-head"><div className="server-title"><i className={cn('server-glyph', server.status.toLowerCase())}><ServerIcon size={22} /></i><div><div className="title-line"><h1>{server.name}</h1><StatusPill status={server.status} /></div><p>{server.host}</p></div></div><div className="heading-actions"><button className="button secondary" onClick={() => openDemo('console', `Console / ${server.name}`, `deploy@${server.host}`)}><Terminal size={16} /> Open console</button><button className="button dark" onClick={() => navigate(`/chat/health?server=${server.id}`)}><Sparkles size={16} /> Ask OpsAI</button></div></div><div className="server-facts"><div><span>Environment</span><b className={cn('env-tag', server.environment.toLowerCase())}>{server.environment}</b></div><div><span>Region</span><b>{server.region}</b></div><div><span>Operating system</span><b>Ubuntu 24.04 LTS</b></div><div><span>Uptime</span><b>{server.uptime}</b></div><div><span>SSH access</span><b className="verified-access"><ShieldCheck size={13} /> Key verified</b></div></div></section>
+  return <div className="content-page server-detail-page page-enter"><button className="back-link" onClick={() => navigate('/dashboard/servers')}><ArrowLeft size={15} /> All servers</button>
+    <section className="server-overview-card"><div className="server-detail-head"><div className="server-title"><i className={cn('server-glyph', server.status.toLowerCase())}><ServerIcon size={22} /></i><div><div className="title-line"><h1>{server.name}</h1><StatusPill status={server.status} /></div><p>{server.host}</p></div></div><div className="heading-actions"><button className="button secondary" onClick={() => openDemo('console', `Console / ${server.name}`, `deploy@${server.host}`)}><Terminal size={16} /> Open console</button><button className="button dark" onClick={() => navigate(`/dashboard/chat/health?server=${server.id}`)}><Sparkles size={16} /> Ask OpsAI</button></div></div><div className="server-facts"><div><span>Environment</span><b className={cn('env-tag', server.environment.toLowerCase())}>{server.environment}</b></div><div><span>Region</span><b>{server.region}</b></div><div><span>Operating system</span><b>Ubuntu 24.04 LTS</b></div><div><span>Uptime</span><b>{server.uptime}</b></div><div><span>SSH access</span><b className="verified-access"><ShieldCheck size={13} /> Key verified</b></div></div></section>
     <div className="detail-tabs">{['Overview','Metrics','Services','Executions','SSH access'].map(item => <button className={tab === item ? 'active' : ''} onClick={() => setTab(item)} key={item}>{item}</button>)}</div>
     {tab === 'Overview' && <><div className="health-banner"><div><span className="pulse-icon">{checking ? <span className="tiny-spinner" /> : <Activity size={17} />}</span><div><strong>{checking ? 'Checking system health...' : 'All systems operational'}</strong><p>{checking ? 'Inspecting services and resources' : '4 critical services active. Last checked just now.'}</p></div></div><button onClick={runCheck} disabled={checking}>Run health check <ArrowRight size={15} /></button></div><div className="detail-section-head"><div><span className="page-eyebrow">Live resources</span><h2>System utilization</h2></div><span><i /> Updated just now</span></div><div className="metric-grid"><ResourceCard label="CPU usage" value={`${server.cpu}%`} detail="8 cores / 2.7 GHz" icon={Cpu} points={[20,32,28,49,35,39,31,34]} /><ResourceCard label="Memory" value={`${server.memory}%`} detail="9.9 of 16 GB" icon={MemoryStick} points={[48,52,49,57,60,58,64,62]} /><ResourceCard label="Disk usage" value={`${server.disk}%`} detail="115 of 240 GB" icon={HardDrive} points={[30,31,34,36,39,42,45,48]} /></div><div className="detail-columns"><ServicePanel setTab={setTab} serviceMenu={serviceMenu} setServiceMenu={setServiceMenu} /><ActivityPanel /></div></>}
     {tab === 'Metrics' && <div className="tab-demo-content"><PageHeading eyebrow="Observability" title="Resource metrics" description="Historical utilization for this server." /><div className="metric-grid"><ResourceCard label="CPU usage" value={`${server.cpu}%`} detail="8 cores / 2.7 GHz" icon={Cpu} points={[12,25,22,52,37,45,31,34]} /><ResourceCard label="Memory" value={`${server.memory}%`} detail="9.9 of 16 GB" icon={MemoryStick} points={[38,45,49,52,60,58,64,62]} /><ResourceCard label="Disk I/O" value="18 MB/s" detail="read + write" icon={HardDrive} points={[15,18,24,20,31,27,38,33]} /></div></div>}
@@ -912,7 +911,7 @@ function ExecutionsPage() {
 }
 
 function PlaceholderPage() {
-  return <div className="placeholder-page"><div className="placeholder-icon"><Database size={24} /></div><span className="page-eyebrow">Workspace module</span><h1>Coming into focus</h1><p>This surface is prepared for backend integration in the next product phase.</p><NavLink to="/chat" className="button dark">Back to command center</NavLink></div>
+  return <div className="placeholder-page"><div className="placeholder-icon"><Database size={24} /></div><span className="page-eyebrow">Workspace module</span><h1>Coming into focus</h1><p>This surface is prepared for backend integration in the next product phase.</p><NavLink to="/dashboard/chat" className="button dark">Back to command center</NavLink></div>
 }
 
 export default App
