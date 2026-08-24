@@ -510,7 +510,7 @@ export function ChatHomePage() {
         </div>
       </section>
 
-      {!loading && showNoServerModal && (
+      {!loading && showNoServerModal && createPortal(
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="no-server-title">
           <button className="modal-scrim" onClick={() => setShowNoServerModal(false)} aria-label="Close" />
           <div className="modal-card">
@@ -596,7 +596,8 @@ export function ChatHomePage() {
               </NavLink>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )
