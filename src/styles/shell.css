@@ -1,5 +1,5 @@
 .app-shell { min-height: 100vh; }
-.sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; width: 64px; background: #fbfbf9; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; overflow: hidden; transition: width .24s ease; }
+.sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; width: 64px; background: #fbfbf9; border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; overflow: visible; transition: width .24s ease; }
 .sidebar.expanded { width: 260px; align-items: stretch; }
 .sidebar-top { height: 64px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; width: 100%; border-bottom: 1px solid var(--line); position: relative; }
 .sidebar-top>strong { display: none; margin-left: 12px; font-size: 13px; letter-spacing: -.02em; }
@@ -57,7 +57,9 @@
 .sidebar.expanded .profile-link small { color: var(--muted); font-size: 7px; margin-top: 3px; }
 .sidebar.expanded .profile-link>.profile-arrow { display: block; color: #9999a0; transition: transform .15s ease; }
 .sidebar.expanded .profile-link>.profile-arrow.open { transform: rotate(90deg); color: var(--ink); }
-.profile-dropdown-menu { position: absolute; left: 0; bottom: calc(100% + 8px); width: 230px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 16px 40px #17171b26; z-index: 100; animation: menu-in .15s ease; }
+.profile-dropdown-menu { position: absolute; left: 0; bottom: calc(100% + 8px); width: 230px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 16px 40px #17171b26; z-index: 1000; animation: menu-in .15s ease; }
+.sidebar.expanded .profile-dropdown-menu { left: 0; bottom: calc(100% + 8px); }
+.sidebar:not(.expanded) .profile-dropdown-menu { left: calc(100% + 10px); bottom: 0; }
 .profile-dropdown-header { padding: 8px 10px 10px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .profile-dropdown-header strong { display: block; font-size: 11px; color: var(--ink); }
 .profile-dropdown-header small { display: block; color: var(--muted); font-size: 9px; margin-top: 2px; }
