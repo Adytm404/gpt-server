@@ -136,6 +136,7 @@ func main() {
 	}
 
 	s := &server{db: db, cfg: cfg, limiter: newLoginLimiter(10, time.Minute), planningLimiter: newPlanningLimiter(20, 5*time.Minute), planningLocks: make(map[uuid.UUID]*sync.Mutex), operationCancels: make(map[uuid.UUID]context.CancelFunc), sseStreams: make(map[string]int)}
+	s.startServerMonitoringWorker(context.Background())
 	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer recoveryCancel()
 	if err := s.failStaleOperations(recoveryCtx); err != nil {
@@ -263,6 +264,8 @@ func (s *server) routes() http.Handler {
 		r.Post("/auth/register", s.requireOrigin(s.register))
 		r.Post("/auth/login", s.requireOrigin(s.login))
 		r.Post("/auth/logout", s.requireOrigin(s.logout))
+		r.Post("/auth/verify-email", s.verifyEmail)
+		r.Post("/auth/resend-verification", s.resendVerification)
 		r.Get("/auth/providers", s.getPublicAuthProviders)
 		r.Get("/auth/google/url", s.getGoogleAuthURL)
 		r.Post("/auth/google/callback", s.handleGoogleCallback)
@@ -377,6 +380,10 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	smtpSettings, _, _ := s.loadSMTPSettings(r.Context())
+	requireVerification := smtpSettings.Enabled && smtpSettings.RequireEmailVerification
+	emailVerified := !requireVerification
+
 	tx, err := s.db.BeginTx(r.Context(), pgx.TxOptions{})
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "internal error")
@@ -384,7 +391,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	userID, workspaceID := uuid.New(), uuid.New()
-	if _, err = tx.Exec(r.Context(), `INSERT INTO users (id, full_name, display_name, email, password_hash) VALUES ($1, $2, $2, $3, $4)`, userID, in.FullName, in.Email, passwordHash); err == nil {
+	if _, err = tx.Exec(r.Context(), `INSERT INTO users (id, full_name, display_name, email, password_hash, email_verified) VALUES ($1, $2, $2, $3, $4, $5)`, userID, in.FullName, in.Email, passwordHash, emailVerified); err == nil {
 		_, err = tx.Exec(r.Context(), `INSERT INTO workspaces (id, name) VALUES ($1, $2)`, workspaceID, in.WorkspaceName)
 	}
 	if err == nil {
@@ -403,6 +410,17 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "internal error")
 		return
 	}
+
+	if requireVerification {
+		_ = s.createAndSendVerificationEmail(r.Context(), userID, in.Email, in.FullName)
+		s.writeJSON(w, http.StatusCreated, map[string]any{
+			"requires_verification": true,
+			"message":               "Account created. Please check your email to verify your address before logging in.",
+			"email":                 in.Email,
+		})
+		return
+	}
+
 	if err := s.startSession(w, r, userID); err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "internal error")
 		return
@@ -426,11 +444,18 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	var userID uuid.UUID
 	var passwordHash string
-	err := s.db.QueryRow(r.Context(), `SELECT id, password_hash FROM users WHERE lower(email) = $1`, email).Scan(&userID, &passwordHash)
+	var emailVerified bool
+	err := s.db.QueryRow(r.Context(), `SELECT id, password_hash, COALESCE(email_verified, true) FROM users WHERE lower(email) = $1`, email).Scan(&userID, &passwordHash, &emailVerified)
 	if err != nil || !verifyPassword(in.Password, passwordHash) {
 		s.writeError(w, r, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
+
+	if !emailVerified {
+		s.writeError(w, r, http.StatusForbidden, "email verification required. please verify your email before logging in.")
+		return
+	}
+
 	if err := s.startSession(w, r, userID); err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "internal error")
 		return
@@ -441,6 +466,101 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusOK, me)
+}
+
+type verifyEmailInput struct {
+	Token string `json:"token"`
+}
+
+func (s *server) verifyEmail(w http.ResponseWriter, r *http.Request) {
+	var in verifyEmailInput
+	if err := decodeJSON(r, &in); err != nil || strings.TrimSpace(in.Token) == "" {
+		s.writeError(w, r, http.StatusBadRequest, "verification token is required")
+		return
+	}
+
+	rawToken := strings.TrimSpace(in.Token)
+	hash := sha256.Sum256([]byte(rawToken))
+
+	var tokenID, userID uuid.UUID
+	var expiresAt time.Time
+	err := s.db.QueryRow(r.Context(), `
+SELECT id, user_id, expires_at
+FROM email_verification_tokens
+WHERE token_hash = $1`, hash[:]).Scan(&tokenID, &userID, &expiresAt)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.writeError(w, r, http.StatusBadRequest, "invalid or expired verification link")
+			return
+		}
+		s.dbError(w, r, err)
+		return
+	}
+
+	if time.Now().After(expiresAt) {
+		_, _ = s.db.Exec(r.Context(), `DELETE FROM email_verification_tokens WHERE id = $1`, tokenID)
+		s.writeError(w, r, http.StatusBadRequest, "verification link has expired. please request a new one.")
+		return
+	}
+
+	tx, err := s.db.Begin(r.Context())
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	_, err = tx.Exec(r.Context(), `UPDATE users SET email_verified = true, updated_at = now() WHERE id = $1`, userID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	_, _ = tx.Exec(r.Context(), `DELETE FROM email_verification_tokens WHERE user_id = $1`, userID)
+
+	if err = tx.Commit(r.Context()); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Email verified successfully! You can now sign in."})
+}
+
+type resendVerificationInput struct {
+	Email string `json:"email"`
+}
+
+func (s *server) resendVerification(w http.ResponseWriter, r *http.Request) {
+	if !s.limiter.allow(clientIP(r), time.Now()) {
+		s.writeError(w, r, http.StatusTooManyRequests, "too many requests, please try again later")
+		return
+	}
+
+	var in resendVerificationInput
+	if err := decodeJSON(r, &in); err != nil || strings.TrimSpace(in.Email) == "" {
+		s.writeError(w, r, http.StatusBadRequest, "valid email is required")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	var userID uuid.UUID
+	var fullName string
+	var emailVerified bool
+	err := s.db.QueryRow(r.Context(), `SELECT id, full_name, COALESCE(email_verified, true) FROM users WHERE lower(email) = $1`, email).Scan(&userID, &fullName, &emailVerified)
+	if err != nil {
+		// Generic success to prevent user enumeration
+		s.writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "If an unverified account exists for this email, a new verification link has been sent."})
+		return
+	}
+
+	if emailVerified {
+		s.writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Account is already verified. You can sign in directly."})
+		return
+	}
+
+	_ = s.createAndSendVerificationEmail(r.Context(), userID, email, fullName)
+	s.writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Verification link sent! Please check your inbox."})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {

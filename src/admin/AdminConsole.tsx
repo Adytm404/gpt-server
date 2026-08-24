@@ -27,6 +27,7 @@ import {
   Gauge,
   Building2,
   Layers3,
+  Mail,
   Plus,
   Save,
   Search,
@@ -1496,15 +1497,43 @@ function AuthSettingsPage() {
   const [redirectUri, setRedirectUri] = useState("");
   const [hasClientSecret, setHasClientSecret] = useState(false);
 
+  // SMTP Settings
+  const [smtpEnabled, setSmtpEnabled] = useState(false);
+  const [requireVerification, setRequireVerification] = useState(false);
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpUser, setSmtpUser] = useState("");
+  const [smtpPassword, setSmtpPassword] = useState("");
+  const [hasSmtpPassword, setHasSmtpPassword] = useState(false);
+  const [smtpFromEmail, setSmtpFromEmail] = useState("");
+  const [smtpFromName, setSmtpFromName] = useState("OpsAI");
+  const [smtpEncryption, setSmtpEncryption] = useState<"tls" | "starttls" | "none">("starttls");
+  const [testEmailRecipient, setTestEmailRecipient] = useState("");
+  const [testingSmtp, setTestingSmtp] = useState(false);
+  const [testResult, setTestResult] = useState<{ success?: boolean; message?: string } | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const res = await adminApi.getGoogleOAuthSettings();
-      setEnabled(res.enabled);
-      setClientId(res.client_id || "");
-      setRedirectUri(res.redirect_uri || `${window.location.origin}/auth/google/callback`);
-      setHasClientSecret(res.has_client_secret);
+      const [googleRes, smtpRes] = await Promise.all([
+        adminApi.getGoogleOAuthSettings(),
+        adminApi.getSMTPSettings(),
+      ]);
+      setEnabled(googleRes.enabled);
+      setClientId(googleRes.client_id || "");
+      setRedirectUri(googleRes.redirect_uri || `${window.location.origin}/auth/google/callback`);
+      setHasClientSecret(googleRes.has_client_secret);
+
+      setSmtpEnabled(smtpRes.enabled);
+      setRequireVerification(smtpRes.require_email_verification);
+      setSmtpHost(smtpRes.host || "");
+      setSmtpPort(smtpRes.port || 587);
+      setSmtpUser(smtpRes.username || "");
+      setHasSmtpPassword(smtpRes.has_password);
+      setSmtpFromEmail(smtpRes.from_email || "");
+      setSmtpFromName(smtpRes.from_name || "OpsAI");
+      setSmtpEncryption(smtpRes.encryption || "starttls");
     } catch (caught) {
       setError(message(caught));
     } finally {
@@ -1520,21 +1549,56 @@ function AuthSettingsPage() {
     setSaving(true);
     setError("");
     try {
-      const res = await adminApi.setGoogleOAuthSettings({
-        enabled,
-        client_id: clientId.trim(),
-        client_secret: clientSecret.trim() || undefined,
-        redirect_uri: redirectUri.trim(),
-      });
-      setEnabled(res.enabled);
-      setClientId(res.client_id || "");
-      setHasClientSecret(res.has_client_secret);
+      const [googleRes, smtpRes] = await Promise.all([
+        adminApi.setGoogleOAuthSettings({
+          enabled,
+          client_id: clientId.trim(),
+          client_secret: clientSecret.trim() || undefined,
+          redirect_uri: redirectUri.trim(),
+        }),
+        adminApi.setSMTPSettings({
+          enabled: smtpEnabled,
+          require_email_verification: requireVerification,
+          host: smtpHost.trim(),
+          port: Number(smtpPort) || 587,
+          username: smtpUser.trim(),
+          password: smtpPassword.trim() || undefined,
+          from_email: smtpFromEmail.trim(),
+          from_name: smtpFromName.trim(),
+          encryption: smtpEncryption,
+        }),
+      ]);
+
+      setEnabled(googleRes.enabled);
+      setClientId(googleRes.client_id || "");
+      setHasClientSecret(googleRes.has_client_secret);
       setClientSecret("");
-      notify("Google OAuth settings updated");
+
+      setSmtpEnabled(smtpRes.enabled);
+      setRequireVerification(smtpRes.require_email_verification);
+      setHasSmtpPassword(smtpRes.has_password);
+      setSmtpPassword("");
+
+      notify("Platform authentication & SMTP settings updated");
     } catch (caught) {
       setError(message(caught));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestSmtp = async () => {
+    setTestingSmtp(true);
+    setTestResult(null);
+    try {
+      const res = await adminApi.testSMTP(testEmailRecipient.trim() || undefined);
+      setTestResult({ success: true, message: `Email sent to ${res.recipient}` });
+      notify("Test email sent successfully");
+    } catch (caught) {
+      const msg = message(caught);
+      setTestResult({ success: false, message: msg });
+    } finally {
+      setTestingSmtp(false);
     }
   };
 
@@ -1549,8 +1613,8 @@ function AuthSettingsPage() {
     <main className="admin-page">
       <PageHead
         eyebrow="Platform control"
-        title="Authentication Settings"
-        copy="Manage external SSO providers such as Google OAuth 2.0."
+        title="Authentication & Email Settings"
+        copy="Manage external SSO providers (Google OAuth 2.0) and SMTP delivery for registration verification and downtime alarms."
         action={
           <button className="button dark" disabled={saving || loading} onClick={() => void save()}>
             <Save size={14} /> {saving ? "Saving..." : "Save settings"}
@@ -1562,7 +1626,7 @@ function AuthSettingsPage() {
           {error}
         </div>
       )}
-      <section className="editor-main" style={{ maxWidth: 860, marginTop: 18 }}>
+      <section className="editor-main" style={{ maxWidth: 860, marginTop: 18, display: "flex", flexDirection: "column", gap: 24 }}>
         <EditorSection
           number="01"
           title="Google OAuth 2.0"
@@ -1608,6 +1672,128 @@ function AuthSettingsPage() {
               </div>
               <small style={{ marginTop: 4, color: "var(--muted)" }}>Add this exact URL to "Authorized redirect URIs" in your Google Cloud Console.</small>
             </label>
+          </div>
+        </EditorSection>
+
+        <EditorSection
+          number="02"
+          title="SMTP Email & Registration Verification"
+          copy="Configure SMTP server credentials for user activation verification and server downtime alerts."
+        >
+          <div className="admin-form grid">
+            <label className="wide" style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <input
+                type="checkbox"
+                checked={smtpEnabled}
+                onChange={(e) => setSmtpEnabled(e.target.checked)}
+                style={{ width: "auto", margin: 0 }}
+              />
+              <span><b>Enable SMTP Email Delivery</b><small style={{ display: "block", color: "var(--muted)" }}>Allows OpsAI to dispatch transactional emails and alert notifications.</small></span>
+            </label>
+
+            <label className="wide" style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 12, padding: "10px 14px", background: "#f8f8f6", borderRadius: 8, border: "1px solid var(--line)" }}>
+              <input
+                type="checkbox"
+                checked={requireVerification}
+                onChange={(e) => setRequireVerification(e.target.checked)}
+                style={{ width: "auto", margin: 0 }}
+              />
+              <span><b>Require Email Verification on Registration</b><small style={{ display: "block", color: "var(--muted)" }}>New registrations must click an activation link before they are permitted to log in.</small></span>
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>SMTP Host</span>
+              <input
+                placeholder="e.g. smtp.gmail.com or mail.domain.com"
+                value={smtpHost}
+                onChange={(e) => setSmtpHost(e.target.value)}
+              />
+            </label>
+
+            <label>
+              <span>Port</span>
+              <input
+                type="number"
+                placeholder="587"
+                value={smtpPort}
+                onChange={(e) => setSmtpPort(Number(e.target.value))}
+              />
+            </label>
+
+            <label>
+              <span>Encryption</span>
+              <select
+                value={smtpEncryption}
+                onChange={(e) => setSmtpEncryption(e.target.value as "tls" | "starttls" | "none")}
+              >
+                <option value="starttls">STARTTLS (Port 587)</option>
+                <option value="tls">SSL / TLS (Port 465)</option>
+                <option value="none">None (Plain)</option>
+              </select>
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>SMTP Username / Email</span>
+              <input
+                placeholder="e.g. alerts@company.com"
+                value={smtpUser}
+                onChange={(e) => setSmtpUser(e.target.value)}
+              />
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>SMTP Password {hasSmtpPassword && <small style={{ color: "var(--green)" }}>(Configured)</small>}</span>
+              <input
+                type="password"
+                placeholder={hasSmtpPassword ? "Leave blank to keep existing password" : "Enter SMTP Password or App Password"}
+                value={smtpPassword}
+                onChange={(e) => setSmtpPassword(e.target.value)}
+              />
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>Sender (From) Email</span>
+              <input
+                placeholder="e.g. no-reply@company.com"
+                value={smtpFromEmail}
+                onChange={(e) => setSmtpFromEmail(e.target.value)}
+              />
+            </label>
+
+            <label style={{ gridColumn: "span 2" }}>
+              <span>Sender (From) Name</span>
+              <input
+                placeholder="OpsAI Control Plane"
+                value={smtpFromName}
+                onChange={(e) => setSmtpFromName(e.target.value)}
+              />
+            </label>
+
+            <div className="wide" style={{ marginTop: 8, padding: 14, background: "#fafaf8", border: "1px solid var(--line)", borderRadius: 10 }}>
+              <span style={{ display: "block", fontWeight: 600, fontSize: 12, marginBottom: 8 }}>Test SMTP Connection</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="email"
+                  placeholder="Recipient email (defaults to your admin email)"
+                  value={testEmailRecipient}
+                  onChange={(e) => setTestEmailRecipient(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="button secondary"
+                  disabled={testingSmtp || !smtpHost}
+                  onClick={() => void handleTestSmtp()}
+                >
+                  <Send size={13} /> {testingSmtp ? "Testing..." : "Send test email"}
+                </button>
+              </div>
+              {testResult && (
+                <p style={{ margin: "8px 0 0", fontSize: 11, color: testResult.success ? "var(--green)" : "var(--red)", display: "flex", alignItems: "center", gap: 6 }}>
+                  {testResult.success ? <Check size={13} /> : <X size={13} />} {testResult.message}
+                </p>
+              )}
+            </div>
           </div>
         </EditorSection>
       </section>

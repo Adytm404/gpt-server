@@ -171,3 +171,22 @@ it('configures workspace AI with selected model and monthly quota', async () => 
   resolveSave(new Response(JSON.stringify({ workspace_id: 'workspace-1', default_model_id: 'model-1', monthly_token_limit: 250000, model_status: 'active' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
   await waitFor(() => expect(screen.getByLabelText('Model for Northstar')).not.toBeDisabled())
 })
+
+it('loads and displays authentication & SMTP settings', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = String(input)
+    if (url.endsWith('/auth-settings/google')) {
+      return new Response(JSON.stringify({ provider: 'google', client_id: 'google-client-id', redirect_uri: 'http://localhost:5173/auth/google/callback', enabled: true, has_client_secret: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.endsWith('/admin/smtp')) {
+      return new Response(JSON.stringify({ host: 'smtp.domain.com', port: 587, username: 'alerts@domain.com', from_email: 'alerts@domain.com', from_name: 'OpsAI', encryption: 'starttls', enabled: true, require_email_verification: true, has_password: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    throw new Error(`Unexpected request: ${url}`)
+  })
+  render(<MemoryRouter initialEntries={['/auth']}><AdminConsole /></MemoryRouter>)
+  expect(await screen.findByText('Authentication & Email Settings')).toBeInTheDocument()
+  expect(screen.getByText('Google OAuth 2.0')).toBeInTheDocument()
+  expect(screen.getByText('SMTP Email & Registration Verification')).toBeInTheDocument()
+  expect(screen.getByDisplayValue('smtp.domain.com')).toBeInTheDocument()
+  expect(screen.getAllByDisplayValue('alerts@domain.com')).toHaveLength(2)
+})

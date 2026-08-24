@@ -100,4 +100,23 @@ describe('admin DTO mapping', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ events: [{ id: 'event-2', action: 'Server created', target_name: 'API', actor: 'Aria', type: 'servers', created_at: '2026-08-20T00:00:00Z' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     await expect(adminApi.history()).resolves.toEqual([expect.objectContaining({ resourceType: 'server' })])
   })
+
+  it('fetches and updates SMTP settings', async () => {
+    const smtpSettings = { host: 'smtp.mail.com', port: 587, username: 'user', from_email: 'no-reply@mail.com', from_name: 'OpsAI', encryption: 'starttls' as const, enabled: true, require_email_verification: true, has_password: true }
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify(smtpSettings), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(smtpSettings), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(adminApi.getSMTPSettings()).resolves.toEqual(smtpSettings)
+    await expect(adminApi.setSMTPSettings({ host: 'smtp.mail.com', port: 587, username: 'user', from_email: 'no-reply@mail.com', from_name: 'OpsAI', encryption: 'starttls', enabled: true, require_email_verification: true })).resolves.toEqual(smtpSettings)
+  })
+
+  it('calls verify email and resend endpoints', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, message: 'Verified' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, message: 'Sent' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(adminApi.verifyEmail('token-123')).resolves.toEqual({ success: true, message: 'Verified' })
+    await expect(adminApi.resendVerification('user@domain.com')).resolves.toEqual({ success: true, message: 'Sent' })
+  })
 })

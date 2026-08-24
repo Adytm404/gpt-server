@@ -17,6 +17,7 @@ import { ServersPage as ApiServersPage, ServerDetailPage as ApiServerDetailPage 
 import { ChatHomePage, ChatThreadPage, ChatThreadsProvider, ExecutionsPage as ApiExecutionsPage, RecentChats, WorkspaceAIUsage } from './chat/ChatPages'
 import { SettingsPage, ProfilePage } from './settings/SettingsPages'
 import { GoogleAuthCallback } from './auth/GoogleAuthCallback'
+import VerifyEmailPage from './auth/VerifyEmailPage'
 import { adminApi } from './api/admin'
 
 const cn = (...values: Array<string | false | undefined>) => values.filter(Boolean).join(' ')
@@ -386,6 +387,10 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
   const [error, setError] = useState('')
   const [googleLoading, setGoogleLoading] = useState(false)
   const [googleEnabled, setGoogleEnabled] = useState(false)
+  const [verificationPending, setVerificationPending] = useState(false)
+  const [unverifiedEmail, setUnverifiedEmail] = useState('')
+  const [resending, setResending] = useState(false)
+  const [resendMessage, setResendMessage] = useState('')
 
   useEffect(() => {
     adminApi.getAuthProviders().then(res => {
@@ -409,20 +414,74 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
     }
   }
 
+  const handleResend = async () => {
+    if (!unverifiedEmail) return
+    setResending(true)
+    setResendMessage('')
+    try {
+      const res = await adminApi.resendVerification(unverifiedEmail)
+      setResendMessage(res.message || 'Verification link sent')
+    } catch (caught) {
+      setResendMessage(caught instanceof Error ? caught.message : 'Failed to resend link')
+    } finally {
+      setResending(false)
+    }
+  }
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!email || password.length < 12 || (register && (!fullName || !workspace))) return
     setLoading(true)
     setError('')
+    setResendMessage('')
     try {
       const body = register ? { full_name: fullName, workspace_name: workspace, email, password } : { email, password }
       const response = await fetch(`${API_URL}/api/v1/auth/${mode}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      if (!response.ok) throw new Error(await apiError(response))
+      if (!response.ok) {
+        const errorText = await apiError(response)
+        if (errorText.toLowerCase().includes('verification required')) {
+          setUnverifiedEmail(email)
+        }
+        throw new Error(errorText)
+      }
+      const data = await response.json().catch(() => null)
+      if (data?.requires_verification) {
+        setVerificationPending(true)
+        setLoading(false)
+        return
+      }
       navigate('/chat', { replace: true })
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unable to complete request')
       setLoading(false)
     }
+  }
+
+  if (verificationPending) {
+    return (
+      <div className="auth-page">
+        <NavLink to="/" className="auth-brand"><BrandMark /><span>OpsAI</span></NavLink>
+        <main className="auth-form-panel">
+          <div className="auth-form-wrap" style={{ textAlign: 'center' }}>
+            <div style={{ width: 48, height: 48, borderRadius: '50%', background: '#f0edff', color: 'var(--accent)', display: 'grid', placeItems: 'center', margin: '0 auto 16px' }}>
+              <Mail size={24} />
+            </div>
+            <span className="page-eyebrow">Verification required</span>
+            <h1>Check your email.</h1>
+            <p>We have sent an activation link to <b>{email}</b>. Please click the link to verify your account and activate your workspace.</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 24 }}>
+              <NavLink to="/login" className="button dark" style={{ width: '100%' }}>
+                Go to Sign In <ArrowRight size={14} />
+              </NavLink>
+              <button type="button" className="button secondary" onClick={() => void adminApi.resendVerification(email).then(() => setResendMessage('Verification link resent!')).catch(e => setResendMessage(e.message))}>
+                Resend verification email
+              </button>
+              {resendMessage && <span style={{ fontSize: 11, color: 'var(--accent)' }}>{resendMessage}</span>}
+            </div>
+          </div>
+        </main>
+      </div>
+    )
   }
   return <div className="auth-page">
     <NavLink to="/" className="auth-brand"><BrandMark /><span>OpsAI</span></NavLink>
@@ -449,7 +508,25 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
         <label className="auth-field"><span>Password <small>12+ characters</small></span><div><LockKeyhole size={15} /><input required minLength={12} type={showPassword ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} placeholder="Enter your password" autoComplete={register ? 'new-password' : 'current-password'} /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? <EyeOff size={15} /> : <Eye size={15} />}</button></div></label>
         {!register && <div className="auth-options"><label><input type="checkbox" defaultChecked /> Keep me signed in</label><button type="button" onClick={() => openDemo('reset', 'Reset password', 'Password reset is a visual demo.')}>Forgot password?</button></div>}
         {register && <label className="auth-consent"><input required type="checkbox" /> I agree to the Terms of Service and acknowledge the Privacy Policy.</label>}
-        {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
+        {error && (
+          <div className="auth-error" role="alert" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <AlertTriangle size={14} /> {error}
+            </div>
+            {unverifiedEmail && (
+              <button
+                type="button"
+                className="button secondary compact"
+                disabled={resending}
+                onClick={() => void handleResend()}
+                style={{ fontSize: 10, marginTop: 4 }}
+              >
+                {resending ? 'Sending...' : 'Resend verification email'}
+              </button>
+            )}
+            {resendMessage && <span style={{ fontSize: 10, color: 'var(--green)' }}>{resendMessage}</span>}
+          </div>
+        )}
         <button className="button dark auth-submit" disabled={loading}>{loading ? <><span className="tiny-spinner" /> {register ? 'Creating workspace...' : 'Signing in...'}</> : register ? 'Create workspace' : 'Sign in'}</button>
       </form>
       <p className="auth-switch">{register ? 'Already operating?' : 'New to OpsAI?'} <NavLink to={register ? '/login' : '/register'}>{register ? 'Sign in' : 'Create a workspace'}</NavLink></p>
@@ -460,7 +537,7 @@ function AuthPage({ mode }: { mode: 'login' | 'register' }) {
 }
 
 function App() {
-  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<ApiPricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/auth/google/callback" element={<GoogleAuthCallback />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
+  return <><DemoUIHost /><Routes><Route path="/" element={<LandingPage />} /><Route path="/pricing" element={<ApiPricingPage />} /><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/verify-email" element={<VerifyEmailPage />} /><Route path="/auth/google/callback" element={<GoogleAuthCallback />} /><Route path="/*" element={<AuthenticatedApp />} /></Routes></>
 }
 
 function StatusPill({ status }: { status: Server['status'] }) {

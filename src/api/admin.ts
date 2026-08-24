@@ -178,6 +178,65 @@ export const adminApi = {
       body: JSON.stringify({ code, state }),
     })
   },
+  async getSMTPSettings() {
+    return apiRequest<{
+      host: string
+      port: number
+      username: string
+      from_email: string
+      from_name: string
+      encryption: 'tls' | 'starttls' | 'none'
+      enabled: boolean
+      require_email_verification: boolean
+      has_password: boolean
+      updated_at?: string
+    }>('/api/v1/admin/smtp')
+  },
+  async setSMTPSettings(input: {
+    host: string
+    port: number
+    username: string
+    password?: string
+    from_email: string
+    from_name: string
+    encryption: 'tls' | 'starttls' | 'none'
+    enabled: boolean
+    require_email_verification: boolean
+  }) {
+    return apiRequest<{
+      host: string
+      port: number
+      username: string
+      from_email: string
+      from_name: string
+      encryption: 'tls' | 'starttls' | 'none'
+      enabled: boolean
+      require_email_verification: boolean
+      has_password: boolean
+      updated_at?: string
+    }>('/api/v1/admin/smtp', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+  async testSMTP(recipient_email?: string) {
+    return apiRequest<{ success: boolean; recipient: string; message: string }>('/api/v1/admin/smtp/test', {
+      method: 'POST',
+      body: JSON.stringify({ recipient_email }),
+    })
+  },
+  async verifyEmail(token: string) {
+    return apiRequest<{ success: boolean; message: string }>('/api/v1/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    })
+  },
+  async resendVerification(email: string) {
+    return apiRequest<{ success: boolean; message: string }>('/api/v1/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    })
+  },
 }
 
 export async function listPublicPlans() {
