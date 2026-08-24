@@ -325,11 +325,11 @@ describe('real chat workspace', () => {
     expect(screen.getByLabelText('Ask OpsAI')).toBeEnabled()
   })
 
-  it('shows honest empty server state', async () => {
+  it('shows honest empty server state with redirect popup modal', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async input => json(String(input).endsWith('/chat/config') ? { configured: true, model_id: 'model-1', monthly_token_limit: 1000, used_tokens: 0 } : String(input).endsWith('/servers') ? { servers: [] } : { threads: [] }))
     renderWithThreads(<ChatHomePage />)
-    expect(await screen.findByText('No servers connected')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Connect a server' })).toHaveAttribute('href', '/dashboard/servers')
+    expect(await screen.findByRole('dialog', { name: 'Belum Ada Server Tersimpan' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Tambah Server' })).toHaveAttribute('href', '/dashboard/servers')
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
   })
 

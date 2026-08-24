@@ -576,7 +576,7 @@ function EditServerModal({
   );
 }
 
-function AddServerModal({
+export function AddServerModal({
   close,
   created: persisted,
   saved,

@@ -427,23 +427,115 @@ export function ChatHomePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [preset, setPreset] = useState('')
-  useEffect(() => {
-    serversApi.list().then(result => {
+  const [showNoServerModal, setShowNoServerModal] = useState(false)
+
+  const loadServers = useCallback(async () => {
+    try {
+      const result = await serversApi.list()
       setServers(result.servers)
       setSelected('')
-    }).catch(caught => setError(caught instanceof Error ? caught.message : 'Unable to load chat configuration')).finally(() => setLoading(false))
+      if (result.servers.length === 0) {
+        setShowNoServerModal(true)
+      } else {
+        setShowNoServerModal(false)
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Unable to load chat configuration')
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  useEffect(() => {
+    void loadServers()
+  }, [loadServers])
+
   const submit = async (content: string, policy: ChatPolicy) => {
     const created = await chatApi.createThread({ serverId: selected, title: content.slice(0, 80) })
     navigate(`/dashboard/chat/${created.id}`, { state: { prompt: content, policy } })
     void refresh()
   }
-  return <div className="home-page page-enter"><div className="ambient-grid" /><section className="hero"><h1>What needs attention<br />across your <em>servers?</em></h1><p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
-    {(error || configError) && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error || configError}</div>}
-    {!loading && !configLoading && !error && !configError && config?.configured === false ? <div className="chat-empty-state"><AlertTriangle size={24} /><strong>Workspace AI unavailable</strong><p>Workspace AI is not configured. Ask platform admin to assign an active model and token quota.</p></div> : !loading && !configLoading && !error && !configError && servers.length === 0 ? <><div className="chat-empty-state"><ServerIcon size={24} /><strong>No servers connected</strong><p>Connect a server before starting an operational chat.</p><NavLink className="button dark" to="/dashboard/servers">Connect a server</NavLink></div><Composer servers={[]} selectedServer="" onSubmit={submit} disabled disabledReason="Connect a server to start a chat." /></> : config?.configured !== false && <Composer servers={servers} selectedServer={selected} setSelectedServer={setSelected} onSubmit={submit} preset={preset} disabled={loading || configLoading || Boolean(error || configError)} />}
-    <div className="trust-line"><ShieldCheck size={14} /> Selected server defines operation scope. Every execution requires approval.</div></section>
-    <section className="suggestions"><div className="section-kicker">Prompt templates</div><div className="suggestion-grid">{suggestions.map(([prompt, meta], index) => <button key={prompt} className="suggestion-card" style={{ animationDelay: `${index * 80 + 200}ms` }} disabled={!selected} onClick={() => setPreset(prompt)}><div className="suggestion-icon"><Command size={18} /></div><div><strong>{prompt}</strong><span>{meta}</span></div></button>)}</div></section>
-  </div>
+
+  return (
+    <div className="home-page page-enter">
+      <div className="ambient-grid" />
+      <section className="hero">
+        <h1>What needs attention<br />across your <em>servers?</em></h1>
+        <p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
+        {(error || configError) && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error || configError}</div>}
+        {!loading && !configLoading && !error && !configError && config?.configured === false ? (
+          <div className="chat-empty-state"><AlertTriangle size={24} /><strong>Workspace AI unavailable</strong><p>Workspace AI is not configured. Ask platform admin to assign an active model and token quota.</p></div>
+        ) : (
+          <Composer
+            servers={servers}
+            selectedServer={selected}
+            setSelectedServer={setSelected}
+            onSubmit={submit}
+            preset={preset}
+            disabled={loading || configLoading || Boolean(error || configError) || servers.length === 0}
+            disabledReason={servers.length === 0 ? 'Connect a server to start a chat.' : ''}
+          />
+        )}
+        <div className="trust-line"><ShieldCheck size={14} /> Selected server defines operation scope. Every execution requires approval.</div>
+      </section>
+      <section className="suggestions">
+        <div className="section-kicker">Prompt templates</div>
+        <div className="suggestion-grid">
+          {suggestions.map(([prompt, meta], index) => (
+            <button
+              key={prompt}
+              className="suggestion-card"
+              style={{ animationDelay: `${index * 80 + 200}ms` }}
+              disabled={!selected}
+              onClick={() => setPreset(prompt)}
+            >
+              <div className="suggestion-icon"><Command size={18} /></div>
+              <div><strong>{prompt}</strong><span>{meta}</span></div>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {!loading && showNoServerModal && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="no-server-title">
+          <button className="modal-scrim" onClick={() => setShowNoServerModal(false)} aria-label="Close" />
+          <div className="modal-card" style={{ maxWidth: 440, textAlign: 'center' }}>
+            <div className="modal-header" style={{ justifyContent: 'center', paddingBottom: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                <div style={{ width: 48, height: 48, borderRadius: 12, background: 'var(--accent-soft)', color: 'var(--accent)', display: 'grid', placeItems: 'center', marginBottom: 12, border: '1px solid #7657ff20' }}>
+                  <ServerIcon size={24} />
+                </div>
+                <span className="page-eyebrow" style={{ color: 'var(--accent)' }}>Infrastructure Required</span>
+                <h2 id="no-server-title" style={{ fontSize: 20, margin: '4px 0 0' }}>Belum Ada Server Tersimpan</h2>
+              </div>
+            </div>
+            <div className="modal-body" style={{ padding: '16px 24px 20px' }}>
+              <p style={{ color: 'var(--muted)', fontSize: 13, lineHeight: 1.6, margin: 0 }}>
+                Untuk memulai AI chat diagnosis dan eksekusi perintah terminal, Anda perlu menghubungkan setidaknya satu server VPS/cloud ke workspace Anda.
+              </p>
+            </div>
+            <div className="modal-footer" style={{ justifyContent: 'center', gap: 10, padding: '16px 24px' }}>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setShowNoServerModal(false)}
+                style={{ flex: 1 }}
+              >
+                Tutup
+              </button>
+              <NavLink
+                to="/dashboard/servers"
+                className="button dark"
+                style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+              >
+                Tambah Server
+              </NavLink>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function useOperationEvents(operation: Operation | null, onState: () => void) {
