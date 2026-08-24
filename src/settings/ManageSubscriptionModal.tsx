@@ -150,7 +150,7 @@ export default function ManageSubscriptionModal({ close }: { close: () => void }
                 </div>
               </div>
 
-              {/* Manage Options (Tetap Langganan / Ubah / Batal) */}
+              {/* Manage Options (Keep / Change / Cancel) */}
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
                   Subscription Options
@@ -162,7 +162,7 @@ export default function ManageSubscriptionModal({ close }: { close: () => void }
                     <CheckCircle2 size={18} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <b style={{ fontSize: 12, display: "block" }}>Tetap Berlangganan (Keep Subscription)</b>
+                    <b style={{ fontSize: 12, display: "block" }}>Keep Subscription</b>
                     <small style={{ color: "var(--muted)", fontSize: 10 }}>Your plan remains active with continuous server diagnostics and quotas.</small>
                   </div>
                   <span style={{ fontSize: 10, fontWeight: 700, color: "var(--green)", background: "#f0fff4", padding: "3px 8px", borderRadius: 5 }}>
@@ -176,7 +176,7 @@ export default function ManageSubscriptionModal({ close }: { close: () => void }
                     <Zap size={18} />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <b style={{ fontSize: 12, display: "block" }}>Ubah Paket (Change / Upgrade Plan)</b>
+                    <b style={{ fontSize: 12, display: "block" }}>Change / Upgrade Plan</b>
                     <small style={{ color: "var(--muted)", fontSize: 10 }}>Switch to higher server capacity or dedicated AI token tiers.</small>
                   </div>
                   <button
@@ -199,7 +199,7 @@ export default function ManageSubscriptionModal({ close }: { close: () => void }
                       <AlertTriangle size={18} />
                     </div>
                     <div style={{ flex: 1 }}>
-                      <b style={{ fontSize: 12, display: "block", color: "var(--red)" }}>Batalkan Langganan (Cancel Plan)</b>
+                      <b style={{ fontSize: 12, display: "block", color: "var(--red)" }}>Cancel Subscription</b>
                       <small style={{ color: "var(--muted)", fontSize: 10 }}>Reverts workspace back to free tier at the end of the billing period.</small>
                     </div>
                     <button
