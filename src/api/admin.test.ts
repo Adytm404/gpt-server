@@ -136,4 +136,15 @@ describe('admin DTO mapping', () => {
     await expect(adminApi.createCheckoutOrder({ plan_id: 'plan-1', billing_period: 'monthly' })).resolves.toEqual(checkoutOrder)
     await expect(adminApi.getOrderStatus('OPS-123')).resolves.toEqual(orderStatus)
   })
+
+  it('updates admin user and manages cron settings', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, message: 'User updated' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ interval_minutes: 10 }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ success: true, interval_minutes: 15 }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(adminApi.updateAdminUser('u-1', { full_name: 'Updated Name', is_suspended: true, suspension_note: 'Policy' })).resolves.toEqual({ success: true, message: 'User updated' })
+    await expect(adminApi.getCronSettings()).resolves.toEqual({ interval_minutes: 10 })
+    await expect(adminApi.setCronSettings({ interval_minutes: 15 })).resolves.toEqual({ success: true, interval_minutes: 15 })
+  })
 })

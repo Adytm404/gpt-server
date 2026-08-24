@@ -69,7 +69,11 @@ func (s *server) adminRoutes(r chi.Router) {
 	r.Get("/plans/{id}/preview", s.previewPlan)
 	r.Get("/history", s.history)
 	r.Get("/users", s.listAdminUsers)
+	r.With(s.requireMutation).Patch("/users/{id}", s.updateAdminUser)
+	r.With(s.requireMutation).Post("/users/{id}", s.updateAdminUser)
 	r.Get("/transactions", s.listAdminTransactions)
+	r.Get("/cron", s.getAdminCronSettings)
+	r.With(s.requireMutation).Post("/cron", s.setAdminCronSettings)
 }
 
 func scanModel(row pgx.Row) (modelResponse, error) {

@@ -138,6 +138,7 @@ func main() {
 	s := &server{db: db, cfg: cfg, limiter: newLoginLimiter(10, time.Minute), planningLimiter: newPlanningLimiter(20, 5*time.Minute), planningLocks: make(map[uuid.UUID]*sync.Mutex), operationCancels: make(map[uuid.UUID]context.CancelFunc), sseStreams: make(map[string]int)}
 	s.startServerMonitoringWorker(context.Background())
 	s.startOrderExpiryWorker(context.Background())
+	s.startGlobalCronWorker(context.Background())
 	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer recoveryCancel()
 	if err := s.failStaleOperations(recoveryCtx); err != nil {
@@ -450,9 +451,20 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	var userID uuid.UUID
 	var passwordHash string
 	var emailVerified bool
-	err := s.db.QueryRow(r.Context(), `SELECT id, password_hash, COALESCE(email_verified, true) FROM users WHERE lower(email) = $1`, email).Scan(&userID, &passwordHash, &emailVerified)
+	var isSuspended bool
+	var suspensionNote string
+	err := s.db.QueryRow(r.Context(), `SELECT id, password_hash, COALESCE(email_verified, true), COALESCE(is_suspended, false), COALESCE(suspension_note, '') FROM users WHERE lower(email) = $1`, email).Scan(&userID, &passwordHash, &emailVerified, &isSuspended, &suspensionNote)
 	if err != nil || !verifyPassword(in.Password, passwordHash) {
 		s.writeError(w, r, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+
+	if isSuspended {
+		msg := "Your account has been suspended by the administrator."
+		if suspensionNote != "" {
+			msg = "Account suspended: " + suspensionNote
+		}
+		s.writeError(w, r, http.StatusForbidden, msg)
 		return
 	}
 

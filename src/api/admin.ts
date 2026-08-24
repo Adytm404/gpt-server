@@ -313,6 +313,7 @@ export const adminApi = {
     return apiRequest<{
       total_users: number
       verified_users: number
+      suspended_users: number
       admin_users: number
       users: Array<{
         id: string
@@ -320,12 +321,44 @@ export const adminApi = {
         email: string
         platform_role: string
         email_verified: boolean
+        is_suspended: boolean
+        suspension_note: string
+        workspace_id?: string
         workspace_name: string
         workspace_role: string
+        plan_id?: string
         plan_name: string
+        plan_expires_at?: string
         created_at: string
       }>
     }>('/api/v1/admin/users')
+  },
+  async updateAdminUser(userId: string, input: {
+    full_name?: string
+    platform_role?: string
+    email_verified?: boolean
+    is_suspended?: boolean
+    suspension_note?: string
+    plan_id?: string
+    plan_duration_days?: number
+  }) {
+    return apiRequest<{ success: boolean; message: string }>(`/api/v1/admin/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    })
+  },
+  async getCronSettings() {
+    return apiRequest<{
+      interval_minutes: number
+      last_run_at?: string
+      updated_at?: string
+    }>('/api/v1/admin/cron')
+  },
+  async setCronSettings(input: { interval_minutes: number }) {
+    return apiRequest<{ success: boolean; interval_minutes: number }>('/api/v1/admin/cron', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
   },
   async getAdminTransactions() {
     return apiRequest<{

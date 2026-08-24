@@ -14,9 +14,11 @@ import {
   useParams,
 } from "react-router-dom";
 import {
+  AlertTriangle,
   Archive,
   ArrowLeft,
   ArrowRight,
+  Ban,
   Bot,
   Check,
   CheckCircle2,
@@ -30,11 +32,14 @@ import {
   Layers3,
   Mail,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Send,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Users,
   X,
 } from "lucide-react";
 import {
@@ -1525,14 +1530,18 @@ function AuthSettingsPage() {
   const [returnUrl, setReturnUrl] = useState("");
   const [expiryPeriod, setExpiryPeriod] = useState(60);
 
+  // Cronjob Settings
+  const [cronInterval, setCronInterval] = useState(5);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const [googleRes, smtpRes, duitkuRes] = await Promise.all([
+      const [googleRes, smtpRes, duitkuRes, cronRes] = await Promise.all([
         adminApi.getGoogleOAuthSettings(),
         adminApi.getSMTPSettings(),
         adminApi.getDuitkuSettings(),
+        adminApi.getCronSettings().catch(() => ({ interval_minutes: 5 })),
       ]);
       setEnabled(googleRes.enabled);
       setClientId(googleRes.client_id || "");
@@ -1556,6 +1565,8 @@ function AuthSettingsPage() {
       setCallbackUrl(duitkuRes.callback_url || `${window.location.origin}/api/v1/billing/duitku/callback`);
       setReturnUrl(duitkuRes.return_url || `${window.location.origin}/checkout/result`);
       setExpiryPeriod(duitkuRes.expiry_period_minutes || 60);
+
+      setCronInterval(cronRes?.interval_minutes || 5);
     } catch (caught) {
       setError(message(caught));
     } finally {
@@ -1597,6 +1608,9 @@ function AuthSettingsPage() {
           callback_url: callbackUrl.trim(),
           return_url: returnUrl.trim(),
           expiry_period_minutes: Number(expiryPeriod) || 60,
+        }),
+        adminApi.setCronSettings({
+          interval_minutes: Number(cronInterval) || 5,
         }),
       ]);
 
@@ -1933,6 +1947,32 @@ function AuthSettingsPage() {
             </label>
           </div>
         </EditorSection>
+
+        <EditorSection
+          number="04"
+          title="Automated Cronjob & Background Tasks"
+          copy="Configure background task execution interval for transaction sync, unpaid order expiry, and subscription renewal checks."
+        >
+          <div className="admin-form grid">
+            <label style={{ gridColumn: "span 2" }}>
+              <span>Cronjob Execution Interval</span>
+              <select
+                value={cronInterval}
+                onChange={(e) => setCronInterval(Number(e.target.value))}
+              >
+                <option value={1}>Every 1 Minute</option>
+                <option value={5}>Every 5 Minutes (Recommended)</option>
+                <option value={10}>Every 10 Minutes</option>
+                <option value={15}>Every 15 Minutes</option>
+                <option value={30}>Every 30 Minutes</option>
+                <option value={60}>Every 1 Hour</option>
+              </select>
+              <small style={{ marginTop: 4, color: "var(--muted)" }}>
+                Automates: (1) Cancelling unpaid orders older than 60 minutes, (2) Auto-syncing pending Duitku transactions with Duitku API, (3) Checking and downgrading expired subscription plans.
+              </small>
+            </label>
+          </div>
+        </EditorSection>
       </section>
     </main>
   );
@@ -1946,34 +1986,48 @@ function formatCurrencyIDR(amount: number) {
   }).format(amount);
 }
 
+type AdminUser = {
+  id: string;
+  full_name: string;
+  email: string;
+  platform_role: string;
+  email_verified: boolean;
+  is_suspended: boolean;
+  suspension_note: string;
+  workspace_id?: string;
+  workspace_name: string;
+  workspace_role: string;
+  plan_id?: string;
+  plan_name: string;
+  plan_expires_at?: string;
+  created_at: string;
+};
+
 function UsersPage() {
   const [data, setData] = useState<{
     total_users: number;
     verified_users: number;
+    suspended_users: number;
     admin_users: number;
-    users: Array<{
-      id: string;
-      full_name: string;
-      email: string;
-      platform_role: string;
-      email_verified: boolean;
-      workspace_name: string;
-      workspace_role: string;
-      plan_name: string;
-      created_at: string;
-    }>;
+    users: AdminUser[];
   } | null>(null);
 
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [editUser, setEditUser] = useState<AdminUser | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const res = await adminApi.getAdminUsers();
-      setData(res);
+      const [usersRes, plansRes] = await Promise.all([
+        adminApi.getAdminUsers(),
+        adminApi.listPlans(),
+      ]);
+      setData(usersRes);
+      setPlans(plansRes.filter((p) => p.status === "Published"));
     } catch (caught) {
       setError(message(caught));
     } finally {
@@ -2001,130 +2055,343 @@ function UsersPage() {
       <PageHead
         eyebrow="Platform Users"
         title="User Management"
-        copy="Overview of all registered users, roles, email verification status, and workspace plans."
+        copy="Overview of all registered users, roles, account suspension, and workspace plan allocations."
         action={
           <button className="button secondary" onClick={() => void load()} disabled={loading}>
-            Refresh
+            <RefreshCw size={13} className={loading ? "spin" : ""} /> Refresh
           </button>
         }
       />
 
-      {error && <div className="inline-api-error" role="alert">{error}</div>}
+      <Summary
+        items={[
+          {
+            label: "Total Users",
+            value: data?.total_users ?? 0,
+            detail: "Registered platform users",
+            icon: Users,
+          },
+          {
+            label: "Verified Accounts",
+            value: data?.verified_users ?? 0,
+            detail: "Activated email accounts",
+            icon: CheckCircle2,
+          },
+          {
+            label: "Suspended Users",
+            value: data?.suspended_users ?? 0,
+            detail: "Access blocked accounts",
+            icon: AlertTriangle,
+          },
+        ]}
+      />
 
-      {/* Summary KPI Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginTop: 18 }}>
-        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Total Users
+      <section className="admin-panel">
+        <div className="admin-toolbar">
+          <label>
+            <Search size={14} />
+            <input
+              placeholder="Search users by name, email, workspace, or plan..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          <span>
+            Showing <b>{filteredUsers.length}</b> of {data?.total_users ?? 0} users
           </span>
-          <div style={{ fontSize: 28, fontWeight: 750, marginTop: 6, color: "#17171b" }}>
-            {data?.total_users ?? "-"}
-          </div>
-          <small style={{ color: "var(--muted)", fontSize: 11 }}>Registered across platform</small>
         </div>
 
-        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Verified Accounts
-          </span>
-          <div style={{ fontSize: 28, fontWeight: 750, marginTop: 6, color: "var(--green)" }}>
-            {data?.verified_users ?? "-"}
-          </div>
-          <small style={{ color: "var(--muted)", fontSize: 11 }}>Email activation completed</small>
-        </div>
+        <AsyncState
+          loading={loading}
+          error={error}
+          retry={() => void load()}
+          empty={!filteredUsers.length ? "No users match your search." : undefined}
+        />
 
-        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Platform Admins
-          </span>
-          <div style={{ fontSize: 28, fontWeight: 750, marginTop: 6, color: "var(--accent)" }}>
-            {data?.admin_users ?? "-"}
-          </div>
-          <small style={{ color: "var(--muted)", fontSize: 11 }}>Full admin control access</small>
-        </div>
-      </div>
+        {!loading && !error && filteredUsers.length > 0 && (
+          <div className="admin-table users-table">
+            <div className="admin-table-head">
+              <span>User</span>
+              <span>Role</span>
+              <span>Status</span>
+              <span>Workspace</span>
+              <span>Plan</span>
+              <span />
+            </div>
 
-      {/* Search & Filter Toolbar */}
-      <div style={{ marginTop: 22, display: "flex", gap: 12, alignItems: "center" }}>
-        <div style={{ position: "relative", flex: 1, maxWidth: 420 }}>
-          <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
-          <input
-            placeholder="Search users by name, email, workspace, or plan..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ width: "100%", height: 38, paddingLeft: 34, paddingRight: 12, border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, background: "#fff" }}
-          />
-        </div>
-        <span style={{ fontSize: 12, color: "var(--muted)" }}>
-          Showing <b>{filteredUsers.length}</b> of {data?.total_users ?? 0} users
-        </span>
-      </div>
+            {filteredUsers.map((u) => (
+              <div className="admin-row" key={u.id}>
+                <div className="admin-identity">
+                  <i>
+                    <Users size={16} />
+                  </i>
+                  <span>
+                    <b>{u.full_name}</b>
+                    <small>{u.email}</small>
+                  </span>
+                </div>
 
-      {/* Users Table */}
-      <section style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, marginTop: 14, overflow: "hidden" }}>
-        {loading ? (
-          <div style={{ padding: 40, textAlign: "center" }}>
-            <span className="tiny-spinner" /> Loading users...
-          </div>
-        ) : filteredUsers.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-            No users match the search criteria.
-          </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: "#fafaf8", borderBottom: "1px solid var(--line)", color: "var(--muted)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.06em" }}>
-                <th style={{ padding: "12px 16px" }}>User</th>
-                <th style={{ padding: "12px 16px" }}>Role</th>
-                <th style={{ padding: "12px 16px" }}>Status</th>
-                <th style={{ padding: "12px 16px" }}>Workspace</th>
-                <th style={{ padding: "12px 16px" }}>Active Plan</th>
-                <th style={{ padding: "12px 16px" }}>Registered</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredUsers.map((u) => (
-                <tr key={u.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                  <td style={{ padding: "12px 16px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: u.platform_role === "admin" ? "var(--accent-soft)" : "#f0f0f0", color: u.platform_role === "admin" ? "var(--accent)" : "#555", display: "grid", placeItems: "center", fontWeight: 700, fontSize: 11 }}>
-                        {u.full_name.slice(0, 2).toUpperCase()}
-                      </div>
-                      <div>
-                        <b style={{ color: "#17171b", display: "block" }}>{u.full_name}</b>
-                        <small style={{ color: "var(--muted)" }}>{u.email}</small>
-                      </div>
-                    </div>
-                  </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: u.platform_role === "admin" ? "var(--accent-soft)" : "#f0f0f0", color: u.platform_role === "admin" ? "var(--accent)" : "#555" }}>
-                      {u.platform_role.toUpperCase()}
+                <span>
+                  <span
+                    style={{
+                      padding: "3px 6px",
+                      borderRadius: 5,
+                      fontSize: 8,
+                      fontWeight: 700,
+                      background: u.platform_role === "admin" ? "var(--accent-soft)" : "var(--soft)",
+                      color: u.platform_role === "admin" ? "var(--accent)" : "var(--ink)",
+                    }}
+                  >
+                    {u.platform_role.toUpperCase()}
+                  </span>
+                </span>
+
+                <span>
+                  {u.is_suspended ? (
+                    <span className="admin-status disabled" title={u.suspension_note}>
+                      <i style={{ background: "var(--red)" }} /> Suspended
                     </span>
-                  </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 10, fontWeight: 650, background: u.email_verified ? "#f0fff4" : "#fff5f5", color: u.email_verified ? "var(--green)" : "var(--red)", border: `1px solid ${u.email_verified ? "#c6f6d5" : "#fed7d7"}` }}>
-                      {u.email_verified ? "Verified" : "Unverified"}
+                  ) : u.email_verified ? (
+                    <span className="admin-status">
+                      <i /> Verified
                     </span>
-                  </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <b>{u.workspace_name || "-"}</b>
-                    {u.workspace_role && <small style={{ display: "block", color: "var(--muted)" }}>({u.workspace_role})</small>}
-                  </td>
-                  <td style={{ padding: "12px 16px" }}>
-                    <span style={{ padding: "3px 8px", borderRadius: 6, background: "#f8f8f6", border: "1px solid var(--line)", fontWeight: 600, color: "#17171b" }}>
-                      {u.plan_name}
+                  ) : (
+                    <span className="admin-status draft">
+                      <i /> Unverified
                     </span>
-                  </td>
-                  <td style={{ padding: "12px 16px", color: "var(--muted)" }}>
-                    {u.created_at ? new Date(u.created_at).toLocaleDateString() : "-"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  )}
+                </span>
+
+                <span>
+                  <b>{u.workspace_name || "-"}</b>
+                  {u.workspace_role && <small style={{ display: "block", color: "var(--muted)" }}>({u.workspace_role})</small>}
+                </span>
+
+                <span>
+                  <span
+                    style={{
+                      padding: "3px 7px",
+                      borderRadius: 6,
+                      background: "#f8f8f6",
+                      border: "1px solid var(--line)",
+                      fontWeight: 600,
+                      color: "#17171b",
+                      fontSize: 8,
+                    }}
+                  >
+                    {u.plan_name}
+                  </span>
+                  {u.plan_expires_at && (
+                    <small style={{ display: "block", color: "var(--muted)", marginTop: 2 }}>
+                      Exp: {new Date(u.plan_expires_at).toLocaleDateString()}
+                    </small>
+                  )}
+                </span>
+
+                <div className="admin-row-actions">
+                  <button title="Edit User & Plan" onClick={() => setEditUser(u)}>
+                    <Edit3 size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </section>
+
+      {editUser && (
+        <UserEditDrawer
+          user={editUser}
+          plans={plans}
+          close={() => setEditUser(null)}
+          save={async (input) => {
+            await adminApi.updateAdminUser(editUser.id, input);
+            notify("User updated successfully");
+            setEditUser(null);
+            void load();
+          }}
+        />
+      )}
     </main>
+  );
+}
+
+function UserEditDrawer({
+  user,
+  plans,
+  close,
+  save,
+}: {
+  user: AdminUser;
+  plans: Plan[];
+  close: () => void;
+  save: (data: {
+    full_name?: string;
+    platform_role?: string;
+    email_verified?: boolean;
+    is_suspended?: boolean;
+    suspension_note?: string;
+    plan_id?: string;
+    plan_duration_days?: number;
+  }) => Promise<void>;
+}) {
+  const [fullName, setFullName] = useState(user.full_name);
+  const [platformRole, setPlatformRole] = useState(user.platform_role);
+  const [emailVerified, setEmailVerified] = useState(user.email_verified);
+  const [isSuspended, setIsSuspended] = useState(user.is_suspended);
+  const [suspensionNote, setSuspensionNote] = useState(user.suspension_note || "");
+  const [allocatedPlanId, setAllocatedPlanId] = useState(user.plan_id || "");
+  const [planDurationDays, setPlanDurationDays] = useState(30);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await save({
+        full_name: fullName.trim(),
+        platform_role: platformRole,
+        email_verified: emailVerified,
+        is_suspended: isSuspended,
+        suspension_note: suspensionNote.trim(),
+        plan_id: allocatedPlanId ? allocatedPlanId : undefined,
+        plan_duration_days: allocatedPlanId ? planDurationDays : undefined,
+      });
+    } catch (caught) {
+      setError(message(caught));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="admin-overlay">
+      <button className="admin-scrim" onClick={close} />
+      <div className="admin-drawer">
+        <header>
+          <div>
+            <h2>Edit User</h2>
+            <p>{user.email}</p>
+          </div>
+          <button type="button" onClick={close}>
+            <X size={15} />
+          </button>
+        </header>
+
+        <form className="admin-form" onSubmit={handleSubmit}>
+          {error && <div className="inline-api-error" role="alert">{error}</div>}
+
+          <label>
+            <span>Full Name</span>
+            <input
+              required
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+            />
+          </label>
+
+          <label>
+            <span>Platform Role</span>
+            <select
+              value={platformRole}
+              onChange={(e) => setPlatformRole(e.target.value)}
+            >
+              <option value="user">User (Standard)</option>
+              <option value="admin">Platform Admin</option>
+            </select>
+          </label>
+
+          <label className="admin-check">
+            <input
+              type="checkbox"
+              checked={emailVerified}
+              onChange={(e) => setEmailVerified(e.target.checked)}
+            />
+            <span>
+              <b>Email Verified</b>
+              <small>Allow user to sign in without email confirmation link.</small>
+            </span>
+          </label>
+
+          <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, marginTop: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 12 }}>
+              Manual Plan Allocation
+            </span>
+
+            <label>
+              <span>Assign Subscription Plan</span>
+              <select
+                value={allocatedPlanId}
+                onChange={(e) => setAllocatedPlanId(e.target.value)}
+              >
+                <option value="">-- Keep Current Plan ({user.plan_name}) --</option>
+                {plans.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.maxServers} servers, {new Intl.NumberFormat("id-ID").format(p.monthlyTokens)} tokens)
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {allocatedPlanId && (
+              <label style={{ marginTop: 10 }}>
+                <span>Plan Duration</span>
+                <select
+                  value={planDurationDays}
+                  onChange={(e) => setPlanDurationDays(Number(e.target.value))}
+                >
+                  <option value={30}>30 Days (1 Month)</option>
+                  <option value={90}>90 Days (3 Months)</option>
+                  <option value={180}>180 Days (6 Months)</option>
+                  <option value={365}>365 Days (1 Year)</option>
+                  <option value={0}>Lifetime / No Expiry</option>
+                </select>
+              </label>
+            )}
+          </div>
+
+          <div style={{ borderTop: "1px solid var(--line)", paddingTop: 14, marginTop: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--red)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 12 }}>
+              Account Suspension
+            </span>
+
+            <label className="admin-check" style={{ borderColor: isSuspended ? "var(--red)" : "var(--line)" }}>
+              <input
+                type="checkbox"
+                checked={isSuspended}
+                onChange={(e) => setIsSuspended(e.target.checked)}
+              />
+              <span>
+                <b style={{ color: isSuspended ? "var(--red)" : "inherit" }}>Suspend Account</b>
+                <small>Immediately block user session and prevent sign-in.</small>
+              </span>
+            </label>
+
+            {isSuspended && (
+              <label style={{ marginTop: 10 }}>
+                <span>Suspension Note (Visible to User)</span>
+                <textarea
+                  rows={3}
+                  placeholder="e.g. Account suspended due to policy violation. Please contact support."
+                  value={suspensionNote}
+                  onChange={(e) => setSuspensionNote(e.target.value)}
+                />
+              </label>
+            )}
+          </div>
+
+          <footer>
+            <button type="button" className="button secondary" onClick={close}>
+              Cancel
+            </button>
+            <button type="submit" className="button dark" disabled={saving}>
+              {saving ? "Saving..." : "Save changes"}
+            </button>
+          </footer>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -2196,150 +2463,125 @@ function TransactionsPage() {
         copy="Real-time revenue metrics, order history, and payment gateway settlement status."
         action={
           <button className="button secondary" onClick={() => void load()} disabled={loading}>
-            Refresh
+            <RefreshCw size={13} className={loading ? "spin" : ""} /> Refresh
           </button>
         }
       />
 
-      {error && <div className="inline-api-error" role="alert">{error}</div>}
+      <Summary
+        items={[
+          {
+            label: "Total Pemasukan (All Time)",
+            value: data ? formatCurrencyIDR(data.total_revenue_idr) : "-",
+            detail: `${data?.paid_orders ?? 0} successful orders`,
+            icon: CreditCard,
+          },
+          {
+            label: "Bulan Ini (Monthly)",
+            value: data ? formatCurrencyIDR(data.monthly_revenue_idr) : "-",
+            detail: "Current calendar month",
+            icon: CheckCircle2,
+          },
+          {
+            label: "Total Orders",
+            value: data?.total_orders ?? 0,
+            detail: `${data?.paid_orders ?? 0} Paid / ${data?.pending_orders ?? 0} Pending`,
+            icon: Layers3,
+          },
+        ]}
+      />
 
-      {/* Revenue KPI Cards */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginTop: 18 }}>
-        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--accent)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Total Pemasukan (All Time)
+      <section className="admin-panel">
+        <div className="admin-toolbar">
+          <label>
+            <Search size={14} />
+            <input
+              placeholder="Search by Order ID, Reference, Customer, or Plan..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+          <span>
+            Showing <b>{filteredTx.length}</b> of {data?.total_orders ?? 0} transactions
           </span>
-          <div style={{ fontSize: 24, fontWeight: 750, marginTop: 6, color: "var(--accent)" }}>
-            {data ? formatCurrencyIDR(data.total_revenue_idr) : "-"}
-          </div>
-          <small style={{ color: "var(--muted)", fontSize: 11 }}>{data?.paid_orders ?? 0} successful orders</small>
         </div>
 
-        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--green)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Bulan Ini (Monthly)
-          </span>
-          <div style={{ fontSize: 24, fontWeight: 750, marginTop: 6, color: "var(--green)" }}>
-            {data ? formatCurrencyIDR(data.monthly_revenue_idr) : "-"}
-          </div>
-          <small style={{ color: "var(--muted)", fontSize: 11 }}>Current calendar month</small>
-        </div>
+        <AsyncState
+          loading={loading}
+          error={error}
+          retry={() => void load()}
+          empty={!filteredTx.length ? "No transactions found." : undefined}
+        />
 
-        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#17171b", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Hari Ini (Today)
-          </span>
-          <div style={{ fontSize: 24, fontWeight: 750, marginTop: 6, color: "#17171b" }}>
-            {data ? formatCurrencyIDR(data.today_revenue_idr) : "-"}
-          </div>
-          <small style={{ color: "var(--muted)", fontSize: 11 }}>Settled today</small>
-        </div>
+        {!loading && !error && filteredTx.length > 0 && (
+          <div className="admin-table tx-table">
+            <div className="admin-table-head">
+              <span>Order / Reference</span>
+              <span>Customer</span>
+              <span>Plan & Cycle</span>
+              <span>Amount</span>
+              <span>Status</span>
+              <span>Date</span>
+            </div>
 
-        <div style={{ padding: "18px 20px", background: "#fff", border: "1px solid var(--line)", borderRadius: 14 }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-            Order Breakdown
-          </span>
-          <div style={{ display: "flex", gap: 10, marginTop: 8, fontSize: 12 }}>
-            <span style={{ color: "var(--green)" }}><b>{data?.paid_orders ?? 0}</b> Paid</span>
-            <span style={{ color: "#b7791f" }}><b>{data?.pending_orders ?? 0}</b> Pending</span>
-            <span style={{ color: "var(--red)" }}><b>{data?.failed_orders ?? 0}</b> Failed</span>
-          </div>
-          <small style={{ color: "var(--muted)", fontSize: 11 }}>Total {data?.total_orders ?? 0} orders created</small>
-        </div>
-      </div>
-
-      {/* Search Toolbar */}
-      <div style={{ marginTop: 22, display: "flex", gap: 12, alignItems: "center" }}>
-        <div style={{ position: "relative", flex: 1, maxWidth: 420 }}>
-          <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--muted)" }} />
-          <input
-            placeholder="Search by Order ID, Reference, Customer, or Plan..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{ width: "100%", height: 38, paddingLeft: 34, paddingRight: 12, border: "1px solid var(--line)", borderRadius: 8, fontSize: 12, background: "#fff" }}
-          />
-        </div>
-        <span style={{ fontSize: 12, color: "var(--muted)" }}>
-          Showing <b>{filteredTx.length}</b> of {data?.total_orders ?? 0} transactions
-        </span>
-      </div>
-
-      {/* Transactions Table */}
-      <section style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: 14, marginTop: 14, overflow: "hidden" }}>
-        {loading ? (
-          <div style={{ padding: 40, textAlign: "center" }}>
-            <span className="tiny-spinner" /> Loading transactions...
-          </div>
-        ) : filteredTx.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-            No transactions found.
-          </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: "#fafaf8", borderBottom: "1px solid var(--line)", color: "var(--muted)", textTransform: "uppercase", fontSize: 10, letterSpacing: "0.06em" }}>
-                <th style={{ padding: "12px 16px" }}>Order ID / Reference</th>
-                <th style={{ padding: "12px 16px" }}>Customer</th>
-                <th style={{ padding: "12px 16px" }}>Plan & Cycle</th>
-                <th style={{ padding: "12px 16px" }}>Amount (IDR)</th>
-                <th style={{ padding: "12px 16px" }}>Status</th>
-                <th style={{ padding: "12px 16px" }}>Method</th>
-                <th style={{ padding: "12px 16px" }}>Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredTx.map((t) => {
-                const isPaid = t.status === "paid";
-                const isPending = t.status === "pending";
-                return (
-                  <tr key={t.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                    <td style={{ padding: "12px 16px" }}>
-                      <b style={{ color: "#17171b", display: "block", fontFamily: "monospace" }}>{t.merchant_order_id}</b>
+            {filteredTx.map((t) => {
+              const isPaid = t.status === "paid";
+              const isPending = t.status === "pending";
+              return (
+                <div className="admin-row" key={t.id}>
+                  <div className="admin-identity">
+                    <i>
+                      <CreditCard size={16} />
+                    </i>
+                    <span>
+                      <b className="admin-mono">{t.merchant_order_id}</b>
                       {t.duitku_reference && (
-                        <small style={{ color: "var(--muted)", fontFamily: "monospace" }}>Ref: {t.duitku_reference}</small>
+                        <small className="admin-mono">Ref: {t.duitku_reference}</small>
                       )}
-                    </td>
-                    <td style={{ padding: "12px 16px" }}>
-                      <b style={{ color: "#17171b", display: "block" }}>{t.user_name}</b>
-                      <small style={{ color: "var(--muted)" }}>{t.user_email}</small>
-                    </td>
-                    <td style={{ padding: "12px 16px" }}>
-                      <span style={{ fontWeight: 600, color: "#17171b" }}>{t.plan_name}</span>
-                      <small style={{ display: "block", color: "var(--muted)", textTransform: "capitalize" }}>{t.billing_period}</small>
-                    </td>
-                    <td style={{ padding: "12px 16px" }}>
-                      <strong style={{ color: isPaid ? "var(--green)" : "#17171b", fontSize: 13 }}>
-                        {formatCurrencyIDR(t.amount_idr)}
-                      </strong>
-                    </td>
-                    <td style={{ padding: "12px 16px" }}>
-                      <span
-                        style={{
-                          padding: "3px 8px",
-                          borderRadius: 6,
-                          fontSize: 10,
-                          fontWeight: 700,
-                          textTransform: "uppercase",
-                          background: isPaid ? "#f0fff4" : isPending ? "#fefcbf" : "#fff5f5",
-                          color: isPaid ? "var(--green)" : isPending ? "#b7791f" : "var(--red)",
-                          border: `1px solid ${isPaid ? "#c6f6d5" : isPending ? "#fef08a" : "#fed7d7"}`,
-                        }}
-                      >
-                        {t.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "12px 16px", color: "#555" }}>
-                      {t.payment_method ? <b>{t.payment_method}</b> : "-"}
-                    </td>
-                    <td style={{ padding: "12px 16px", color: "var(--muted)" }}>
-                      <div>{new Date(t.created_at).toLocaleDateString()}</div>
-                      <small>{new Date(t.created_at).toLocaleTimeString()}</small>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    </span>
+                  </div>
+
+                  <span>
+                    <b>{t.user_name}</b>
+                    <small style={{ display: "block", color: "var(--muted)" }}>{t.user_email}</small>
+                  </span>
+
+                  <span>
+                    <b>{t.plan_name}</b>
+                    <small style={{ display: "block", color: "var(--muted)", textTransform: "capitalize" }}>{t.billing_period}</small>
+                  </span>
+
+                  <span>
+                    <strong style={{ color: isPaid ? "var(--green)" : "#17171b", fontSize: 11 }}>
+                      {formatCurrencyIDR(t.amount_idr)}
+                    </strong>
+                  </span>
+
+                  <span>
+                    <span
+                      style={{
+                        padding: "3px 7px",
+                        borderRadius: 6,
+                        fontSize: 8,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        background: isPaid ? "#f0fff4" : isPending ? "#fefcbf" : "#fff5f5",
+                        color: isPaid ? "var(--green)" : isPending ? "#b7791f" : "var(--red)",
+                        border: `1px solid ${isPaid ? "#c6f6d5" : isPending ? "#fef08a" : "#fed7d7"}`,
+                      }}
+                    >
+                      {t.status}
+                    </span>
+                  </span>
+
+                  <span>
+                    <div>{new Date(t.created_at).toLocaleDateString()}</div>
+                    <small style={{ color: "var(--muted)", fontSize: 8 }}>{new Date(t.created_at).toLocaleTimeString()}</small>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         )}
       </section>
     </main>

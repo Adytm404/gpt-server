@@ -184,6 +184,9 @@ it('loads and displays authentication & SMTP settings', async () => {
     if (url.endsWith('/admin/duitku')) {
       return new Response(JSON.stringify({ merchant_code: 'DS1234', environment: 'sandbox', enabled: true, callback_url: 'http://localhost:8080/callback', return_url: 'http://localhost:5173/result', expiry_period_minutes: 60, has_api_key: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
+    if (url.endsWith('/admin/cron')) {
+      return new Response(JSON.stringify({ interval_minutes: 5, updated_at: '2026-08-24T00:00:00Z' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
     throw new Error(`Unexpected request: ${url}`)
   })
   render(<MemoryRouter initialEntries={['/auth']}><AdminConsole /></MemoryRouter>)
@@ -191,18 +194,20 @@ it('loads and displays authentication & SMTP settings', async () => {
   expect(screen.getByText('Google OAuth 2.0')).toBeInTheDocument()
   expect(screen.getByText('SMTP Email & Registration Verification')).toBeInTheDocument()
   expect(screen.getByText('Duitku POP Payment Gateway')).toBeInTheDocument()
+  expect(screen.getByText('Automated Cronjob & Background Tasks')).toBeInTheDocument()
   expect(screen.getByDisplayValue('smtp.domain.com')).toBeInTheDocument()
   expect(screen.getByDisplayValue('DS1234')).toBeInTheDocument()
   expect(screen.getAllByDisplayValue('alerts@domain.com')).toHaveLength(2)
 })
 
-it('loads and displays admin users list', async () => {
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+it('loads and displays admin users list and allows editing user and plan', async () => {
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input)
-    if (url.endsWith('/admin/users')) {
+    if (url.endsWith('/admin/users') && (!init?.method || init.method === 'GET')) {
       return new Response(JSON.stringify({
         total_users: 1,
         verified_users: 1,
+        suspended_users: 0,
         admin_users: 1,
         users: [{
           id: 'u-1',
@@ -210,12 +215,20 @@ it('loads and displays admin users list', async () => {
           email: 'aria@northstar.dev',
           platform_role: 'admin',
           email_verified: true,
+          is_suspended: false,
+          suspension_note: '',
           workspace_name: 'Northstar Ops',
           workspace_role: 'owner',
           plan_name: 'Professional',
           created_at: '2026-08-20T00:00:00Z',
         }],
       }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.endsWith('/admin/plans')) {
+      return new Response(JSON.stringify({ plans: [{ id: 'plan-pro', name: 'Professional', slug: 'professional', description: '', max_servers: 10, monthly_tokens: 500000, status: 'published', visibility: 'public', features: [], allowed_model_ids: [] }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (url.includes('/admin/users/u-1') && init?.method === 'PATCH') {
+      return new Response(JSON.stringify({ success: true, message: 'User updated' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }
     throw new Error(`Unexpected request: ${url}`)
   })
@@ -224,6 +237,10 @@ it('loads and displays admin users list', async () => {
   expect(screen.getByText('Aria Rahman')).toBeInTheDocument()
   expect(screen.getByText('aria@northstar.dev')).toBeInTheDocument()
   expect(screen.getByText('Northstar Ops')).toBeInTheDocument()
+
+  await userEvent.click(screen.getByTitle('Edit User & Plan'))
+  expect(screen.getByText('Manual Plan Allocation')).toBeInTheDocument()
+  expect(screen.getByText('Account Suspension')).toBeInTheDocument()
 })
 
 it('loads and displays admin transactions and income', async () => {
