@@ -293,10 +293,7 @@ func (s *server) createCheckoutOrder(w http.ResponseWriter, r *http.Request) {
 	merchantOrderID := fmt.Sprintf("OPS-%d-%s", time.Now().Unix(), orderID.String()[:8])
 
 	productDetails := fmt.Sprintf("OpsAI %s Plan (%s)", plan.Name, strings.Title(period))
-	callbackURL := settings.CallbackURL
-	if callbackURL == "" {
-		callbackURL = s.cfg.frontendOrigin + "/api/v1/billing/duitku/callback"
-	}
+	callbackURL := s.resolvePublicCallbackURL(settings.CallbackURL)
 	returnURL := settings.ReturnURL
 	if returnURL == "" {
 		returnURL = fmt.Sprintf("%s/checkout/result?merchantOrderId=%s", s.cfg.frontendOrigin, merchantOrderID)
@@ -494,6 +491,25 @@ WHERE id = $1`, orderID, paymentCode, rawPayload)
 	s.writeJSON(w, http.StatusOK, map[string]string{"status": "OK"})
 }
 
+func (s *server) resolvePublicCallbackURL(custom string) string {
+	custom = strings.TrimSpace(custom)
+	if custom != "" && !strings.Contains(custom, "localhost") && !strings.Contains(custom, "127.0.0.1") {
+		return custom
+	}
+	for _, orig := range s.cfg.allowedOrigins {
+		if !strings.Contains(orig, "localhost") && !strings.Contains(orig, "127.0.0.1") && strings.HasPrefix(orig, "http") {
+			return strings.TrimRight(orig, "/") + "/api/v1/billing/duitku/callback"
+		}
+	}
+	if !strings.Contains(s.cfg.frontendOrigin, "localhost") && !strings.Contains(s.cfg.frontendOrigin, "127.0.0.1") {
+		return strings.TrimRight(s.cfg.frontendOrigin, "/") + "/api/v1/billing/duitku/callback"
+	}
+	if custom != "" {
+		return custom
+	}
+	return s.cfg.frontendOrigin + "/api/v1/billing/duitku/callback"
+}
+
 func (s *server) getOrderStatus(w http.ResponseWriter, r *http.Request) {
 	merchantOrderID := strings.TrimSpace(r.URL.Query().Get("merchant_order_id"))
 	if merchantOrderID == "" {
@@ -524,6 +540,50 @@ WHERE o.merchant_order_id = $1`, merchantOrderID).
 		return
 	}
 
+	// Active sync with Duitku if currently pending
+	if status == "pending" {
+		settings, apiKey, loadErr := s.loadDuitkuSettings(r.Context())
+		if loadErr == nil && settings.MerchantCode != "" && apiKey != "" {
+			// Query Duitku transactionStatus
+			duitkuStatus, duitkuPaid := s.checkDuitkuTransactionStatus(r.Context(), settings, apiKey, merchantOrderID)
+			if duitkuPaid {
+				// Mark as paid & activate workspace plan
+				now := time.Now().UTC()
+				tx, txErr := s.db.Begin(r.Context())
+				if txErr == nil {
+					defer tx.Rollback(r.Context())
+					_, _ = tx.Exec(r.Context(), `
+UPDATE workspace_orders
+SET status = 'paid', paid_at = $2, updated_at = $2
+WHERE id = $1`, orderID, now)
+
+					var monthlyTokens int64
+					var defaultModelID uuid.UUID
+					if scanErr := tx.QueryRow(r.Context(), `
+SELECT monthly_tokens, default_model_id
+FROM subscription_plan_revisions
+WHERE id = $1`, planRevisionID).Scan(&monthlyTokens, &defaultModelID); scanErr == nil {
+						_, _ = tx.Exec(r.Context(), `
+INSERT INTO workspace_subscriptions (workspace_id, plan_revision_id, default_model_id, monthly_token_limit, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (workspace_id) DO UPDATE SET
+  plan_revision_id = EXCLUDED.plan_revision_id,
+  default_model_id = EXCLUDED.default_model_id,
+  monthly_token_limit = EXCLUDED.monthly_token_limit,
+  updated_at = now()`, workspaceID, planRevisionID, defaultModelID, monthlyTokens)
+					}
+
+					_ = tx.Commit(r.Context())
+					status = "paid"
+					paidAt = &now
+				}
+			} else if duitkuStatus == "02" {
+				_, _ = s.db.Exec(r.Context(), `UPDATE workspace_orders SET status = 'failed', updated_at = now() WHERE id = $1`, orderID)
+				status = "failed"
+			}
+		}
+	}
+
 	res := map[string]any{
 		"order_id":          orderID,
 		"merchant_order_id": merchantOrderID,
@@ -541,4 +601,49 @@ WHERE o.merchant_order_id = $1`, merchantOrderID).
 	}
 
 	s.writeJSON(w, http.StatusOK, res)
+}
+
+func (s *server) checkDuitkuTransactionStatus(ctx context.Context, settings platformDuitkuSettings, apiKey, merchantOrderID string) (string, bool) {
+	// Formula: HMAC_SHA256(merchantCode + merchantOrderId, apiKey)
+	stringToSign := settings.MerchantCode + merchantOrderID
+	mac := hmac.New(sha256.New, []byte(apiKey))
+	mac.Write([]byte(stringToSign))
+	signature := hex.EncodeToString(mac.Sum(nil))
+
+	reqBody := map[string]string{
+		"merchantCode":    settings.MerchantCode,
+		"merchantOrderId": merchantOrderID,
+		"signature":       signature,
+	}
+	jsonBytes, _ := json.Marshal(reqBody)
+
+	endpoint := "https://sandbox.duitku.com/webapi/api/merchant/transactionStatus"
+	if settings.Environment == "production" {
+		endpoint = "https://passport.duitku.com/webapi/api/merchant/transactionStatus"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var duitkuStatus struct {
+		StatusCode    string `json:"statusCode"`
+		StatusMessage string `json:"statusMessage"`
+	}
+	_ = json.Unmarshal(respBytes, &duitkuStatus)
+
+	if duitkuStatus.StatusCode == "00" {
+		return "00", true
+	}
+	return duitkuStatus.StatusCode, false
 }
