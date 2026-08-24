@@ -1870,7 +1870,7 @@ function AuthSettingsPage() {
                 value={duitkuEnv}
                 onChange={(e) => setDuitkuEnv(e.target.value as "sandbox" | "production")}
               >
-                <option value="sandbox">Sandbox (Testing / Uji Coba)</option>
+                <option value="sandbox">Sandbox (Testing / Demo)</option>
                 <option value="production">Production (Live Payments)</option>
               </select>
             </label>

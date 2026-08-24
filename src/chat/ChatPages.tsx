@@ -464,7 +464,14 @@ export function ChatHomePage() {
         <p className="hero-copy">Diagnose incidents, inspect infrastructure, and execute approved commands from one focused workspace.</p>
         {(error || configError) && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error || configError}</div>}
         {!loading && !configLoading && !error && !configError && config?.configured === false ? (
-          <div className="chat-empty-state"><AlertTriangle size={24} /><strong>Workspace AI unavailable</strong><p>Workspace AI is not configured. Ask platform admin to assign an active model and token quota.</p></div>
+          <div className="chat-empty-state">
+            <AlertTriangle size={24} />
+            <strong>Workspace AI Unavailable</strong>
+            <p>Your workspace needs an active subscription plan with an assigned AI model and token quota.</p>
+            <NavLink to="/dashboard/pricing" className="button dark" style={{ textDecoration: 'none', marginTop: 8 }}>
+              Choose a Plan
+            </NavLink>
+          </div>
         ) : (
           <Composer
             servers={servers}

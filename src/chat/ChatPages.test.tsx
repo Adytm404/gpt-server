@@ -384,7 +384,8 @@ describe('real chat workspace', () => {
       return json({ threads: [] })
     })
     renderWithThreads(<ChatHomePage />)
-    expect(await screen.findByText('Workspace AI is not configured. Ask platform admin to assign an active model and token quota.')).toBeInTheDocument()
+    expect(await screen.findByText('Your workspace needs an active subscription plan with an assigned AI model and token quota.')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Choose a Plan' })).toHaveAttribute('href', '/dashboard/pricing')
     expect(screen.queryByLabelText('Ask OpsAI')).not.toBeInTheDocument()
   })
 
