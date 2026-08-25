@@ -74,6 +74,15 @@ export type ChatConfig = {
   modelStatus?: string
 }
 
+export type ChatContext = {
+  threadId: string
+  contextWindow: number
+  estimatedTokens: number
+  usagePercent: number
+  compacted: boolean
+  compactedAt?: string
+}
+
 export type OperationStatusAck = { id: string; status: string }
 
 type AnyDTO = Record<string, unknown>
@@ -143,6 +152,13 @@ export const chatApi = {
     if (pagination?.beforeSequence != null) params.set('before_sequence', String(pagination.beforeSequence))
     const query = params.toString() ? `?${params.toString()}` : ''
     return unwrapList<unknown>(await apiRequest(`/api/v1/chat/threads/${encodeURIComponent(id)}/messages${query}`), 'messages').map(messageFromDTO)
+  },
+  async getContext(id: string) {
+    const dto = await apiRequest<AnyDTO>(`/api/v1/chat/threads/${encodeURIComponent(id)}/context`)
+    return { threadId: text(dto.thread_id), contextWindow: number(dto.context_window) || 0, estimatedTokens: number(dto.estimated_tokens) || 0, usagePercent: number(dto.usage_percent) || 0, compacted: Boolean(dto.compacted), compactedAt: text(dto.compacted_at) || undefined } satisfies ChatContext
+  },
+  async compactContext(id: string) {
+    return apiRequest<{ success: boolean; summary: string }>(`/api/v1/chat/threads/${encodeURIComponent(id)}/compact`, { method: 'POST', body: JSON.stringify({}) })
   },
   async sendMessage(id: string, input: { content: string; policy: ChatPolicy }) {
     const body = await apiRequest<unknown>(`/api/v1/chat/threads/${encodeURIComponent(id)}/messages`, { method: 'POST', body: JSON.stringify({ content: input.content, policy: input.policy }) })

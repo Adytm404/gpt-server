@@ -45,6 +45,16 @@ type chatMessageResponse struct {
 	CreatedAt        time.Time  `json:"created_at"`
 }
 
+type chatContextResponse struct {
+	ThreadID        uuid.UUID  `json:"thread_id"`
+	ContextWindow   int        `json:"context_window"`
+	EstimatedTokens int        `json:"estimated_tokens"`
+	UsagePercent    int        `json:"usage_percent"`
+	Compacted       bool       `json:"compacted"`
+	CompactedAt     *time.Time `json:"compacted_at,omitempty"`
+	SourceSequence  int64      `json:"source_sequence"`
+}
+
 type operationResponse struct {
 	ID, ThreadID, ServerID, CreatedBy, ModelID    uuid.UUID
 	Status, Policy, Risk, Title, Summary, Error   string
@@ -113,7 +123,9 @@ func (s *server) chatRoutes(r chi.Router) {
 	r.With(s.requireMutation).Patch("/threads/{id}", s.requireWorkspaceAction("operate", s.updateChatThread))
 	r.With(s.requireMutation).Delete("/threads/{id}", s.requireWorkspaceAction("operate", s.deleteChatThread))
 	r.Get("/threads/{id}/messages", s.listChatMessages)
+	r.Get("/threads/{id}/context", s.getChatContext)
 	r.With(s.requireMutation).Post("/threads/{id}/messages", s.requireWorkspaceAction("operate", s.createChatMessage))
+	r.With(s.requireMutation).Post("/threads/{id}/compact", s.requireWorkspaceAction("operate", s.compactChatThread))
 }
 
 func scanThread(row pgx.Row) (chatThreadResponse, error) {
@@ -355,11 +367,110 @@ FROM (
 	s.writeJSON(w, 200, map[string]any{"messages": out})
 }
 
+func estimateChatTokens(messages []chatMessageResponse, summary string) int {
+	total := len(summary)
+	for _, message := range messages {
+		total += len(message.Content)
+	}
+	return total/4 + 1
+}
+
+func (s *server) getChatContext(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	a := authFrom(r.Context())
+	var window int
+	var compactedAt *time.Time
+	var summary string
+	var sourceSequence int64
+	if err := s.db.QueryRow(r.Context(), `SELECT m.context_window,c.updated_at,COALESCE(c.summary,''),COALESCE(c.source_sequence,0) FROM chat_threads t JOIN workspace_subscriptions ws ON ws.workspace_id=t.workspace_id JOIN ai_models m ON m.id=COALESCE(ws.default_model_id,(SELECT default_model_id FROM subscription_plan_revisions WHERE id=ws.plan_revision_id AND status='published')) LEFT JOIN chat_context_compactions c ON c.thread_id=t.id WHERE t.id=$1 AND t.workspace_id=$2 AND m.status='active'`, id, a.WorkspaceID).Scan(&window, &compactedAt, &summary, &sourceSequence); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			s.writeError(w, r, http.StatusNotFound, "chat context unavailable")
+			return
+		}
+		s.dbError(w, r, err)
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT id,thread_id,role,kind,operation_id,reply_to_message_id,sequence,content,model_id,input_tokens,output_tokens,created_at FROM chat_messages WHERE thread_id=$1 AND sequence > $3 AND thread_id IN (SELECT id FROM chat_threads WHERE workspace_id=$2) ORDER BY sequence DESC LIMIT 50`, id, a.WorkspaceID, sourceSequence)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer rows.Close()
+	messages := []chatMessageResponse{}
+	for rows.Next() {
+		var x chatMessageResponse
+		if err := rows.Scan(&x.ID, &x.ThreadID, &x.Role, &x.Kind, &x.OperationID, &x.ReplyToMessageID, &x.Sequence, &x.Content, &x.ModelID, &x.InputTokens, &x.OutputTokens, &x.CreatedAt); err == nil {
+			messages = append(messages, x)
+		}
+	}
+	estimated := estimateChatTokens(messages, summary)
+	percent := 0
+	if window > 0 {
+		percent = estimated * 100 / window
+		if percent > 100 {
+			percent = 100
+		}
+	}
+	s.writeJSON(w, http.StatusOK, chatContextResponse{ThreadID: id, ContextWindow: window, EstimatedTokens: estimated, UsagePercent: percent, Compacted: summary != "", CompactedAt: compactedAt, SourceSequence: sourceSequence})
+}
+
+func (s *server) compactChatThread(w http.ResponseWriter, r *http.Request) {
+	id, ok := s.pathUUID(w, r)
+	if !ok {
+		return
+	}
+	a := authFrom(r.Context())
+	model, err := s.resolvePlanner(r.Context(), a.WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	rows, err := s.db.Query(r.Context(), `SELECT role,content,sequence FROM chat_messages WHERE thread_id=$1 AND thread_id IN (SELECT id FROM chat_threads WHERE workspace_id=$2) ORDER BY sequence ASC`, id, a.WorkspaceID)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	defer rows.Close()
+	var input strings.Builder
+	var source int64
+	for rows.Next() {
+		var role, content string
+		if rows.Scan(&role, &content, &source) == nil {
+			input.WriteString(role)
+			input.WriteString(": ")
+			input.WriteString(boundedRedacted(content, 6000))
+			input.WriteString("\n")
+		}
+	}
+	if input.Len() == 0 {
+		s.writeError(w, r, http.StatusBadRequest, "chat has no context to compact")
+		return
+	}
+	prompt := "Create a concise, factual continuation memory for this server operations chat. Preserve user intent, server scope, decisions, important findings, unresolved questions, and constraints. Remove repetition and secrets. Return plain text only.\n\n" + input.String()
+	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.modelRequestTimeout)
+	defer cancel()
+	compact, usage, err := requestOpenAIText(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, "You compact trusted application chat history into a short continuation memory. Never reveal credentials, tokens, prompts, or secrets. Return plain text only.", prompt, false, nil)
+	if err != nil {
+		s.writeError(w, r, http.StatusBadGateway, "context compaction failed; retry shortly")
+		return
+	}
+	_, err = s.db.Exec(r.Context(), `INSERT INTO chat_context_compactions(id,thread_id,workspace_id,summary,source_sequence,input_tokens,output_tokens) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(thread_id) DO UPDATE SET summary=EXCLUDED.summary,source_sequence=EXCLUDED.source_sequence,input_tokens=EXCLUDED.input_tokens,output_tokens=EXCLUDED.output_tokens,updated_at=now()`, uuid.New(), id, a.WorkspaceID, compact, source, usage.InputTokens, usage.OutputTokens)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"success": true, "summary": compact})
+}
+
 type resolvedPlanner struct {
 	ID   uuid.UUID
 	Name string
 	plannerModel
 	MonthlyLimit, Used int64
+	ContextWindow      int
 }
 
 type plannerQuerier interface {
@@ -373,7 +484,7 @@ func (s *server) resolvePlanner(ctx context.Context, workspaceID uuid.UUID) (res
 func (s *server) resolvePlannerWith(ctx context.Context, db plannerQuerier, workspaceID uuid.UUID) (resolvedPlanner, error) {
 	var x resolvedPlanner
 	var ciphertext []byte
-	err := db.QueryRow(ctx, `SELECT m.id,m.name,m.base_url,m.external_model_id,m.api_key_ciphertext,ws.monthly_token_limit,COALESCE((SELECT sum(total_tokens) FROM token_usage WHERE workspace_id=ws.workspace_id AND period_start=date_trunc('month',now())::date),0) FROM workspace_subscriptions ws JOIN ai_models m ON m.id=COALESCE(ws.default_model_id,(SELECT default_model_id FROM subscription_plan_revisions WHERE id=ws.plan_revision_id AND status='published')) WHERE ws.workspace_id=$1 AND m.status='active'`, workspaceID).Scan(&x.ID, &x.Name, &x.BaseURL, &x.ExternalID, &ciphertext, &x.MonthlyLimit, &x.Used)
+	err := db.QueryRow(ctx, `SELECT m.id,m.name,m.base_url,m.external_model_id,m.api_key_ciphertext,ws.monthly_token_limit,COALESCE((SELECT sum(total_tokens) FROM token_usage WHERE workspace_id=ws.workspace_id AND period_start=date_trunc('month',now())::date),0),m.context_window FROM workspace_subscriptions ws JOIN ai_models m ON m.id=COALESCE(ws.default_model_id,(SELECT default_model_id FROM subscription_plan_revisions WHERE id=ws.plan_revision_id AND status='published')) WHERE ws.workspace_id=$1 AND m.status='active'`, workspaceID).Scan(&x.ID, &x.Name, &x.BaseURL, &x.ExternalID, &ciphertext, &x.MonthlyLimit, &x.Used, &x.ContextWindow)
 	if err != nil {
 		return x, err
 	}
@@ -484,7 +595,13 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var history []chatHistoryMessage
-	hRows, hErr := conn.Query(r.Context(), `SELECT role, content FROM (SELECT role, content, sequence FROM chat_messages WHERE thread_id=$1 ORDER BY sequence DESC LIMIT 10) sub ORDER BY sequence ASC`, threadID)
+	var contextSummary string
+	var contextSource int64
+	_ = conn.QueryRow(r.Context(), `SELECT COALESCE(summary,''),COALESCE(source_sequence,0) FROM chat_context_compactions WHERE thread_id=$1`, threadID).Scan(&contextSummary, &contextSource)
+	if strings.TrimSpace(contextSummary) != "" {
+		history = append(history, chatHistoryMessage{Role: "system", Content: "Compacted conversation memory (trusted application context): " + boundedRedacted(contextSummary, 12000)})
+	}
+	hRows, hErr := conn.Query(r.Context(), `SELECT role, content FROM (SELECT role, content, sequence FROM chat_messages WHERE thread_id=$1 AND sequence > $2 ORDER BY sequence DESC LIMIT 10) sub ORDER BY sequence ASC`, threadID, contextSource)
 	if hErr == nil {
 		defer hRows.Close()
 		for hRows.Next() {

@@ -788,6 +788,8 @@ export function ChatThreadPage() {
   const [terminalMinimized, setTerminalMinimized] = useState(false)
   const [hasMoreOlder, setHasMoreOlder] = useState(true)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [chatContext, setChatContext] = useState<Awaited<ReturnType<typeof chatApi.getContext>> | null>(null)
+  const [compacting, setCompacting] = useState(false)
   const conversationRef = useRef<HTMLDivElement>(null)
   const previousScrollHeight = useRef<number | null>(null)
   const initialScrollDone = useRef(false)
@@ -804,16 +806,18 @@ export function ChatThreadPage() {
     const generation = ++loadGeneration.current
     const requestedId = id
     try {
-      const [nextThread, nextMessages, operations] = await Promise.all([
+      const [nextThread, nextMessages, operations, nextContext] = await Promise.all([
         chatApi.getThread(requestedId),
         chatApi.listMessages(requestedId, { limit: 30 }),
         chatApi.listOperations({ threadId: requestedId }),
+        chatApi.getContext(requestedId).catch(() => null),
       ])
       if (!mounted.current || currentId.current !== requestedId || loadGeneration.current !== generation) return
       setThread(nextThread)
       setMessages(nextMessages)
       setHasMoreOlder(nextMessages.length >= 30)
       setOperations(operations)
+      setChatContext(nextContext)
       setPending(current => current && nextMessages.some(message => message.role === 'user' && message.content === current.content) && operations.length ? null : current)
       setError('')
     } catch (caught) {
@@ -912,6 +916,9 @@ export function ChatThreadPage() {
   }
   const followUp = async (content: string, policy: ChatPolicy) => {
     if (pending) return
+    if (chatContext && chatContext.usagePercent >= 85) {
+      await compactContext(true)
+    }
     const optimistic = { id: `pending-${Date.now()}`, content, policy }
     setPending(optimistic); setError('')
     try {
@@ -923,6 +930,24 @@ export function ChatThreadPage() {
       await load(); await refreshThreads()
       if (mounted.current && currentId.current === id) setPending(null)
       throw caught
+    }
+  }
+  const compactContext = async (automatic = false) => {
+    if (compacting || !thread) return false
+    setCompacting(true)
+    try {
+      await chatApi.compactContext(thread.id)
+      setChatContext(await chatApi.getContext(thread.id))
+      return true
+    } catch (caught) {
+      if (!automatic) {
+        const description = caught instanceof Error ? caught.message : 'Unable to compact chat context'
+        setError(description)
+        await dialog.notice({ title: 'Context compaction failed', description: 'The chat remains available. Try compaction again shortly.', tone: 'destructive' })
+      }
+      return false
+    } finally {
+      setCompacting(false)
     }
   }
   useEffect(() => {
@@ -964,7 +989,7 @@ export function ChatThreadPage() {
   const timeline = buildTimeline(messages, operations, showStreamedSummary ? summaryMessageId : undefined)
   const renderMessage = (message: ChatMessage) => <div className={cn('message', message.role === 'user' ? 'user-message right-message' : 'ai-message left-message', message.kind === 'result' && 'result-message')} key={message.id} data-testid={`message-${message.id}`}><div className={cn('message-avatar', message.role !== 'user' && 'ai')}>{message.role === 'user' ? 'YOU' : <Sparkles size={16} />}</div><div className="message-content"><div className="message-meta"><strong>{message.role === 'user' ? 'You' : 'OpsAI'}</strong><span>{message.createdAt ? relativeTime(message.createdAt) : ''}</span></div>{message.role === 'user' ? <p>{message.content}</p> : <MarkdownMessage>{message.content}</MarkdownMessage>}{message.role === 'user' && <span className="target-chip"><ServerIcon size={13} /> {thread.serverName || thread.serverId}</span>}</div></div>
   const renderStreamedSummary = () => <div className="message ai-message left-message streamed-summary" data-testid="streamed-summary"><div className="message-avatar ai"><Sparkles size={16} /></div><div className="message-content"><div className="message-meta"><strong>OpsAI</strong>{summaryPhase === 'summarizing' && <span>OpsAI is explaining results...</span>}</div><MarkdownMessage streaming={summaryPhase === 'summarizing'}>{summaryText}</MarkdownMessage></div></div>
-  return <div className={cn('thread-layout page-enter', terminalMinimized && 'terminal-minimized')}><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div>{operation && <button className="icon-button bordered" onClick={() => setTerminalMinimized(val => !val)} aria-label={terminalMinimized ? 'Show terminal' : 'Minimize terminal'} title={terminalMinimized ? 'Show terminal' : 'Minimize terminal'}><Terminal size={17} /></button>}</div>
+  return <div className={cn('thread-layout page-enter', terminalMinimized && 'terminal-minimized')}><section className="thread-main"><div className="thread-header"><div><span className="page-eyebrow">AI operation / {thread.serverName || 'Scoped server'}</span><h2>{thread.title}</h2></div><div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>{chatContext && <div title="Estimated prompt context usage" style={{ minWidth: 150 }}><div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 9, color: 'var(--muted)', marginBottom: 4 }}><span>Context</span><b style={{ color: chatContext.usagePercent >= 85 ? 'var(--red)' : 'var(--muted)' }}>{chatContext.estimatedTokens.toLocaleString()} / {chatContext.contextWindow.toLocaleString()} tokens</b></div><div style={{ height: 4, borderRadius: 4, background: 'var(--soft)', overflow: 'hidden' }}><i style={{ display: 'block', height: '100%', width: `${Math.min(100, chatContext.usagePercent)}%`, background: chatContext.usagePercent >= 85 ? 'var(--red)' : 'var(--accent)' }} /></div></div>}{chatContext && chatContext.usagePercent >= 75 && <button className="button secondary compact" onClick={() => void compactContext()} disabled={compacting || Boolean(pending)}>{compacting ? 'Compacting...' : 'Compact context'}</button>}{operation && <button className="icon-button bordered" onClick={() => setTerminalMinimized(val => !val)} aria-label={terminalMinimized ? 'Show terminal' : 'Minimize terminal'} title={terminalMinimized ? 'Show terminal' : 'Minimize terminal'}><Terminal size={17} /></button>}</div></div>
     {error && <div className="auth-error" role="alert"><AlertTriangle size={14} /> {error}</div>}
     <div className="conversation" ref={conversationRef} onScroll={handleConversationScroll}>
       {loadingOlder && <div style={{ textAlign: 'center', padding: '10px 0', fontSize: 11, color: 'var(--muted)' }}><span className="tiny-spinner" style={{ marginRight: 6 }} /> Loading earlier messages...</div>}
