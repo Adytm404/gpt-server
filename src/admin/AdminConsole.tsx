@@ -471,6 +471,7 @@ function ModelDrawer({
     },
   );
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -803,6 +804,7 @@ function PlanEditor() {
   const [models, setModels] = useState<Model[]>([]);
   const [loading, setLoading] = useState(!create);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [mutationError, setMutationError] = useState("");
   const load = useCallback(async () => {
@@ -824,11 +826,17 @@ function PlanEditor() {
   useEffect(() => {
     void load();
   }, [load]);
-  const setNumber = (field: keyof Plan, value: string) =>
+  const setNumber = (field: keyof Plan, value: string) => {
+    setDirty(true);
     setDraft((current) => ({
       ...current,
       [field]: Math.max(0, Number.parseInt(value || "0", 10)),
     }));
+  };
+  const updateDraft = (patch: Partial<Plan>) => {
+    setDirty(true);
+    setDraft((current) => ({ ...current, ...patch }));
+  };
   const save = async (openPreview = false) => {
     setSaving(true);
     setMutationError("");
@@ -842,6 +850,7 @@ function PlanEditor() {
       };
       const saved = await adminApi.savePlan(normalized, create);
       setDraft(saved);
+      setDirty(false);
       notify("Draft saved");
       navigate(
         openPreview
@@ -855,13 +864,15 @@ function PlanEditor() {
       setSaving(false);
     }
   };
-  const toggleModel = (id: string) =>
+  const toggleModel = (id: string) => {
+    setDirty(true);
     setDraft((current) => ({
       ...current,
       allowedModels: current.allowedModels.includes(id)
         ? current.allowedModels.filter((item) => item !== id)
         : [...current.allowedModels, id],
     }));
+  };
   if (loading || loadError)
     return (
       <main className="admin-page">
@@ -876,7 +887,7 @@ function PlanEditor() {
       <PageHead
         eyebrow={create ? "New catalog plan" : `Editing / ${draft.slug}`}
         title={create ? "Create plan" : draft.name}
-        copy="Set commercial identity and enforceable workspace entitlements."
+        copy="Set customer-facing pricing and enforceable workspace entitlements. Changes stay in draft until you publish them."
         action={
           <div className="head-actions">
             <button
@@ -884,14 +895,14 @@ function PlanEditor() {
               disabled={saving}
               onClick={() => void save(true)}
             >
-              <Eye size={14} /> Preview
+              <Eye size={14} /> Preview saved draft
             </button>
             <button
               className="button dark"
               disabled={saving}
               onClick={() => void save()}
             >
-              <Save size={14} /> {saving ? "Saving..." : "Save draft"}
+              <Save size={14} /> {saving ? "Saving draft..." : dirty ? "Save draft changes" : "Save draft"}
             </button>
           </div>
         }
@@ -914,8 +925,7 @@ function PlanEditor() {
                 <input
                   value={draft.name}
                   onChange={(e) =>
-                    setDraft({
-                      ...draft,
+                    updateDraft({
                       name: e.target.value,
                       slug:
                         draft.slug ||
@@ -930,7 +940,7 @@ function PlanEditor() {
                 <span>Slug</span>
                 <input
                   value={draft.slug}
-                  onChange={(e) => setDraft({ ...draft, slug: e.target.value })}
+                  onChange={(e) => updateDraft({ slug: e.target.value })}
                 />
               </label>
               <label className="wide">
@@ -939,7 +949,7 @@ function PlanEditor() {
                   rows={3}
                   value={draft.description}
                   onChange={(e) =>
-                    setDraft({ ...draft, description: e.target.value })
+                    updateDraft({ description: e.target.value })
                   }
                 />
               </label>
@@ -958,10 +968,7 @@ function PlanEditor() {
                 <select
                   value={draft.visibility}
                   onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      visibility: e.target.value as Plan["visibility"],
-                    })
+                    updateDraft({ visibility: e.target.value as Plan["visibility"] })
                   }
                 >
                   <option>Private</option>
@@ -1011,10 +1018,7 @@ function PlanEditor() {
                 <select
                   value={draft.overLimit}
                   onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      overLimit: e.target.value as Plan["overLimit"],
-                    })
+                    updateDraft({ overLimit: e.target.value as Plan["overLimit"] })
                   }
                 >
                   <option>Block requests</option>
@@ -1037,7 +1041,7 @@ function PlanEditor() {
                 <select
                   value={draft.defaultModel}
                   onChange={(e) =>
-                    setDraft({ ...draft, defaultModel: e.target.value })
+                    updateDraft({ defaultModel: e.target.value })
                   }
                 >
                   <option value="">Select model</option>
@@ -1053,7 +1057,7 @@ function PlanEditor() {
                 <select
                   value={draft.fallbackModel}
                   onChange={(e) =>
-                    setDraft({ ...draft, fallbackModel: e.target.value })
+                    updateDraft({ fallbackModel: e.target.value })
                   }
                 >
                   <option value="">Select model</option>
@@ -1096,10 +1100,7 @@ function PlanEditor() {
                   rows={6}
                   value={draft.features.join("\n")}
                   onChange={(e) =>
-                    setDraft({
-                      ...draft,
-                      features: e.target.value.split("\n").filter(Boolean),
-                    })
+                    updateDraft({ features: e.target.value.split("\n").filter(Boolean) })
                   }
                 />
               </label>

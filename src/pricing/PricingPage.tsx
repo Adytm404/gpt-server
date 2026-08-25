@@ -83,9 +83,9 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
             <h1>Plans &amp; Capacity</h1>
             <p>Manage workspace limits, monthly AI tokens, and server concurrency for {session?.workspace?.name || 'your workspace'}.</p>
           </div>
-          <div className="billing-toggle" aria-label="Billing period" style={{ margin: 0 }}>
-            <button type="button" className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly</button>
-            <button type="button" className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual (Save)</button>
+            <div className="billing-toggle" aria-label="Billing period" style={{ margin: 0 }}>
+            <button type="button" className={!annual ? 'active' : ''} onClick={() => setAnnual(false)}>Monthly <small>/ month</small></button>
+            <button type="button" className={annual ? 'active' : ''} onClick={() => setAnnual(true)}>Annual <small>/ month</small></button>
           </div>
         </div>
 
@@ -130,6 +130,8 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
           <div className="dashboard-plan-grid">
             {plans.map((plan, index) => {
               const price = annual ? plan.annualPriceCents : plan.priceCents
+              const annualTotal = plan.annualPriceCents * 12
+              const savingPercent = plan.priceCents > 0 ? Math.max(0, Math.round((1 - plan.annualPriceCents / plan.priceCents) * 100)) : 0
               const isCurrent = subscription?.plan_id === plan.id || subscription?.plan_revision_id === plan.id
               const isFeatured = index === 1
 
@@ -190,7 +192,7 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
                     <small>/ workspace / month</small>
                   </div>
                   <span className="plan-period-badge">
-                    {annual ? 'Billed annually via Duitku' : 'Billed monthly via Duitku'}
+                    {annual ? `Billed annually: ${formatIDR(annualTotal)} total${savingPercent ? ` / save ${savingPercent}%` : ''}` : 'Billed monthly via Duitku'}
                   </span>
 
                   <div style={{ marginTop: 6, marginBottom: 4 }}>
@@ -300,7 +302,7 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
                     <strong>{formatIDR(annual ? plan.annualPriceCents : plan.priceCents)}</strong>
                     <small>/ workspace / month</small>
                   </div>
-                  <small className="billing-note">{annual ? 'Billed annually' : 'Billed monthly'}</small>
+                  <small className="billing-note">{annual ? `Billed annually: ${formatIDR(plan.annualPriceCents * 12)} total` : 'Billed monthly'}</small>
 
                   <NavLink
                     to={`/checkout/${encodeURIComponent(plan.id)}?period=${annual ? 'annual' : 'monthly'}`}
@@ -375,7 +377,7 @@ export default function PricingPage({ mode }: { mode?: 'public' | 'onboarding' |
                   <strong>{formatIDR(annual ? plan.annualPriceCents : plan.priceCents)}</strong>
                   <small>/ workspace / month</small>
                 </div>
-                <small className="billing-note">{annual ? 'Billed annually' : 'Billed monthly'}</small>
+                <small className="billing-note">{annual ? `Billed annually: ${formatIDR(plan.annualPriceCents * 12)} total` : 'Billed monthly'}</small>
                 <NavLink to={`/checkout/${encodeURIComponent(plan.id)}?period=${annual ? 'annual' : 'monthly'}`} className={cn('button', index === 1 ? 'accent' : 'secondary')}>
                   Subscribe to {plan.name} <ArrowRight size={14} />
                 </NavLink>
