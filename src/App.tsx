@@ -124,8 +124,15 @@ function SidebarProfileMenu({
         setOpen(false)
       }
     }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
     document.addEventListener('mousedown', handleDown)
-    return () => document.removeEventListener('mousedown', handleDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
   }, [])
 
   return (
@@ -227,6 +234,11 @@ function Sidebar({ open, close, expanded, toggle }: { open: boolean; close: () =
   const location = useLocation()
   const { session } = useSession()
   const [loggingOut, setLoggingOut] = useState(false)
+  useEffect(() => {
+    if (window.innerWidth > 760) return
+    document.body.style.overflow = open ? 'hidden' : ''
+    return () => { document.body.style.overflow = '' }
+  }, [open])
   const adminMode = location.pathname.startsWith('/dashboard/admin') || location.pathname.startsWith('/admin')
   const initials = session?.user.full_name.split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase() || 'U'
   const logout = async () => {
