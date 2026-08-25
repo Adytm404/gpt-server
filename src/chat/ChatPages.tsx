@@ -809,7 +809,7 @@ export function ChatThreadPage() {
       const [nextThread, nextMessages, operations, nextContext] = await Promise.all([
         chatApi.getThread(requestedId),
         chatApi.listMessages(requestedId, { limit: 30 }),
-        chatApi.listOperations({ threadId: requestedId }),
+        chatApi.listOperations({ threadId: requestedId }).then(result => result.operations),
         chatApi.getContext(requestedId).catch(() => null),
       ])
       if (!mounted.current || currentId.current !== requestedId || loadGeneration.current !== generation) return
@@ -1003,8 +1003,24 @@ export function ChatThreadPage() {
 
 export function ExecutionsPage() {
   const [operations, setOperations] = useState<Operation[]>([])
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  useEffect(() => { chatApi.listOperations().then(setOperations).catch(caught => setError(caught instanceof Error ? caught.message : 'Unable to load executions')).finally(() => setLoading(false)) }, [])
-  return <div className="content-page page-enter"><div className="page-heading"><div><span className="page-eyebrow">Operations</span><h1>Executions</h1><p>Every command, approval, and output reported by operation API.</p></div></div>{loading && <p>Loading executions...</p>}{error && <div className="auth-error" role="alert">{error}</div>}{!loading && !error && operations.length === 0 && <div className="chat-empty-state"><Terminal size={24} /><strong>No executions yet</strong><p>Approved chat operations appear here.</p></div>}{operations.length > 0 && <div className="execution-table" data-testid="executions-table"><div className="execution-table-head"><span>Operation</span><span>Server</span><span>Status</span><span>Steps</span><span>Created</span></div>{operations.map(operation => <NavLink to={operation.threadId ? `/dashboard/chat/${operation.threadId}` : '/dashboard/executions'} className="execution-table-row" key={operation.id}><span><i><Terminal size={16} /></i><span><strong>{operation.title}</strong><small>{operation.id}</small></span></span><span>{operation.serverName || operation.serverId || 'Unavailable'}</span><span><b className={cn('table-status', ['failed', 'cancelled', 'canceled', 'rejected'].includes(operation.status) && 'failed')}><i />{operation.status.replaceAll('_', ' ')}</b></span><span>{operation.steps.filter(step => ['completed', 'succeeded'].includes(step.status)).length} / {operation.steps.length}</span><span>{operation.createdAt ? new Date(operation.createdAt).toLocaleString() : '-'}</span></NavLink>)}</div>}</div>
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError('')
+    chatApi.listOperations({ page, pageSize: 20 }).then(result => {
+      if (!active) return
+      setOperations(result.operations)
+      setTotal(result.total)
+      setTotalPages(result.totalPages)
+    }).catch(caught => {
+      if (active) setError(caught instanceof Error ? caught.message : 'Unable to load executions')
+    }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [page])
+  return <div className="content-page page-enter"><div className="page-heading"><div><span className="page-eyebrow">Operations</span><h1>Executions</h1><p>Every command, approval, and output reported by operation API.</p></div></div>{loading && <p>Loading executions...</p>}{error && <div className="auth-error" role="alert">{error}</div>}{!loading && !error && operations.length === 0 && <div className="chat-empty-state"><Terminal size={24} /><strong>No executions yet</strong><p>Approved chat operations appear here.</p></div>}{operations.length > 0 && <><div className="execution-table" data-testid="executions-table"><div className="execution-table-head"><span>Operation</span><span>Server</span><span>Status</span><span>Steps</span><span>Created</span></div>{operations.map(operation => <NavLink to={operation.threadId ? `/dashboard/chat/${operation.threadId}` : '/dashboard/executions'} className="execution-table-row" key={operation.id}><span><i><Terminal size={16} /></i><span><strong>{operation.title}</strong><small>{operation.id}</small></span></span><span>{operation.serverName || operation.serverId || 'Unavailable'}</span><span><b className={cn('table-status', ['failed', 'cancelled', 'canceled', 'rejected'].includes(operation.status) && 'failed')}><i />{operation.status.replaceAll('_', ' ')}</b></span><span>{operation.steps.filter(step => ['completed', 'succeeded'].includes(step.status)).length} / {operation.steps.length}</span><span>{operation.createdAt ? new Date(operation.createdAt).toLocaleString() : '-'}</span></NavLink>)}</div><div className="pagination-bar" aria-label="Executions pagination"><span>Showing {(page - 1) * 20 + 1}-{Math.min(page * 20, total)} of {total}</span><div><button className="button secondary compact" disabled={page <= 1 || loading} onClick={() => setPage(current => current - 1)}>Previous</button><span>Page {page} of {totalPages}</span><button className="button secondary compact" disabled={page >= totalPages || loading} onClick={() => setPage(current => current + 1)}>Next</button></div></div></>}</div>
 }

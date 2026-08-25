@@ -84,7 +84,25 @@ func (s *server) listOperations(w http.ResponseWriter, r *http.Request) {
 		args = append(args, id)
 		where += " AND thread_id=$2"
 	}
-	rows, err := s.db.Query(r.Context(), operationSelect+` WHERE `+where+` ORDER BY created_at DESC LIMIT 200`, args...)
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	var total int
+	if err := s.db.QueryRow(r.Context(), `SELECT count(*) FROM operations WHERE `+where, args...).Scan(&total); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	offset := (page - 1) * pageSize
+	args = append(args, pageSize, offset)
+	rows, err := s.db.Query(r.Context(), operationSelect+` WHERE `+where+` ORDER BY created_at DESC LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
 	if err != nil {
 		s.dbError(w, r, err)
 		return
@@ -111,7 +129,7 @@ func (s *server) listOperations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.writeJSON(w, 200, map[string]any{"operations": out})
+	s.writeJSON(w, 200, map[string]any{"operations": out, "page": page, "page_size": pageSize, "total": total, "total_pages": (total + pageSize - 1) / pageSize})
 }
 func (s *server) getOperation(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.pathUUID(w, r)

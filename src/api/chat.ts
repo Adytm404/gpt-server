@@ -165,9 +165,20 @@ export const chatApi = {
     const dto = (body || {}) as AnyDTO
     return { message: dto.message ? messageFromDTO(dto.message) : ('role' in dto ? messageFromDTO(dto) : undefined), operation: operationFromResponse(body) }
   },
-  async listOperations(filters: { threadId?: string } = {}) {
-    const query = filters.threadId ? `?thread_id=${encodeURIComponent(filters.threadId)}` : ''
-    return unwrapList<unknown>(await apiRequest(`/api/v1/operations${query}`), 'operations').map(operationFromDTO)
+  async listOperations(filters: { threadId?: string; page?: number; pageSize?: number } = {}) {
+    const params = new URLSearchParams()
+    if (filters.threadId) params.set('thread_id', filters.threadId)
+    if (filters.page) params.set('page', String(filters.page))
+    if (filters.pageSize) params.set('page_size', String(filters.pageSize))
+    const query = params.toString() ? `?${params}` : ''
+    const body = await apiRequest<Record<string, unknown>>(`/api/v1/operations${query}`)
+    return {
+      operations: unwrapList<unknown>(body, 'operations').map(operationFromDTO),
+      page: typeof body.page === 'number' ? body.page : filters.page || 1,
+      pageSize: typeof body.page_size === 'number' ? body.page_size : filters.pageSize || 20,
+      total: typeof body.total === 'number' ? body.total : 0,
+      totalPages: typeof body.total_pages === 'number' ? body.total_pages : 0,
+    }
   },
   async getOperation(id: string) { return operationFromDTO(unwrapOne(await apiRequest(`/api/v1/operations/${encodeURIComponent(id)}`), 'operation')) },
   async approveOperation(id: string) { return unwrapOne<OperationStatusAck>(await apiRequest(`/api/v1/operations/${encodeURIComponent(id)}/approve`, { method: 'POST' }), 'operation') },
