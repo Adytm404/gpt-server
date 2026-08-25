@@ -722,6 +722,9 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err == nil {
+		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET title=CASE WHEN title='' OR title='New chat' THEN $3 ELSE title END,updated_at=now() WHERE id=$1 AND workspace_id=$2`, threadID, a.WorkspaceID, aiChatTitle(plan.Title))
+	}
+	if err == nil {
 		err = tx.QueryRow(r.Context(), `INSERT INTO chat_messages(id,thread_id,operation_id,reply_to_message_id,role,kind,sequence,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,$4,'assistant','plan',nextval('chat_message_global_sequence'),$5,$6,$7,$8) RETURNING sequence`, assistantID, threadID, opID, msgID, assistantContent, model.ID, usage.InputTokens, usage.OutputTokens).Scan(&assistantSequence)
 	}
 	for i, step := range plan.Steps {
@@ -853,7 +856,7 @@ func (s *server) persistRoutedResponse(w http.ResponseWriter, r *http.Request, c
 		_, err = tx.Exec(r.Context(), `INSERT INTO token_usage(id,workspace_id,thread_id,operation_id,message_id,phase,model_id,input_tokens,output_tokens,total_tokens,period_start) VALUES($1,$2,$3,NULL,$4,'routing',$5,$6::bigint,$7::bigint,$6::bigint+$7::bigint,date_trunc('month',now())::date)`, uuid.New(), workspaceID, threadID, assistantID, model.ID, usage.InputTokens, usage.OutputTokens)
 	}
 	if err == nil {
-		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET updated_at=now() WHERE id=$1 AND workspace_id=$2`, threadID, workspaceID)
+		_, err = tx.Exec(r.Context(), `UPDATE chat_threads SET title=CASE WHEN title='' OR title='New chat' THEN $3 ELSE title END, updated_at=now() WHERE id=$1 AND workspace_id=$2`, threadID, workspaceID, aiChatTitle(response))
 	}
 	if err == nil {
 		err = tx.Commit(r.Context())
@@ -865,6 +868,24 @@ func (s *server) persistRoutedResponse(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, map[string]any{"message": chatMessageResponse{ID: assistantID, ThreadID: threadID, Role: "assistant", Kind: "chat", ReplyToMessageID: &userID, Sequence: assistantSequence, Content: response, ModelID: &model.ID, InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}, "operation": nil})
+}
+
+func aiChatTitle(response string) string {
+	clean := strings.Join(strings.Fields(redactOperationalOutput(response)), " ")
+	clean = strings.Trim(clean, " \t\r\n-:.,;!?\"'")
+	if clean == "" {
+		return "New chat"
+	}
+	for _, separator := range []string{". ", "? ", "! ", "\n"} {
+		if index := strings.Index(clean, separator); index >= 18 {
+			clean = clean[:index]
+			break
+		}
+	}
+	if len(clean) > 72 {
+		clean = strings.TrimSpace(clean[:72]) + "..."
+	}
+	return clean
 }
 
 func (s *server) failPlanning(id uuid.UUID, message string, usages ...plannerUsage) {

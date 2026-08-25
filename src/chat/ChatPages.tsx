@@ -458,7 +458,7 @@ export function ChatHomePage() {
   }, [loadServers])
 
   const submit = async (content: string, policy: ChatPolicy) => {
-    const created = await chatApi.createThread({ serverId: selected, title: content.slice(0, 80) })
+    const created = await chatApi.createThread({ serverId: selected, title: 'New chat' })
     navigate(`/dashboard/chat/${created.id}`, { state: { prompt: content, policy } })
     void refresh()
   }
