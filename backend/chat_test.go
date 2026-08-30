@@ -297,7 +297,7 @@ func TestAgentDecisionParserRejectsMalformedUsageUnsafeAndRepeated(t *testing.T)
 }
 
 func TestAgentLoopLimitsPositionsAndDuplicates(t *testing.T) {
-	if canRequestAgentDecision(maxAgentRounds, 3) || canRequestAgentDecision(0, maxOperationSteps) || !canRequestAgentDecision(3, 11) {
+	if canRequestAgentDecision(maxAgentRounds, 3) || canRequestAgentDecision(0, maxOperationSteps) || !canRequestAgentDecision(29, 99) {
 		t.Fatal("agent limits broken")
 	}
 	steps := []planStep{{Executable: "uptime"}, {Executable: "du", Args: []string{"-sh", "--", "/backup"}}}

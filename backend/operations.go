@@ -24,8 +24,8 @@ import (
 const maxOperationOutput = 1 << 20
 const maxSummaryInput = 64 << 10
 const maxAgentInput = 64 << 10
-const maxAgentRounds = 4
-const maxOperationSteps = 12
+const maxAgentRounds = 30
+const maxOperationSteps = 100
 
 func (s *server) operationRoutes(r chi.Router) {
 	r.Get("/", s.listOperations)
@@ -373,7 +373,6 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 		}
 		steps, loadErr = s.loadOperationSteps(ctx, id)
 		if loadErr != nil {
-			s.setAgentSummaryNote(id, "Agent could not continue because operation evidence became unavailable.")
 			break
 		}
 		round := 0
@@ -381,7 +380,6 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 			return
 		}
 		if !canRequestAgentDecision(round, len(steps)) {
-			s.setAgentSummaryNote(id, "Agent investigation limit reached; summary uses evidence collected so far.")
 			break
 		}
 		decision, usage, decisionErr := s.decideAgentContinuation(ctx, id, workspaceID, round+1, steps)
@@ -389,21 +387,19 @@ func (s *server) runOperation(id, workspaceID uuid.UUID) {
 			return
 		}
 		if decisionErr != nil {
-			s.recordAgentRound(id, workspaceID, round+1, usage, nil, "Agent could not continue safely; summary uses evidence collected so far.")
+			s.recordAgentRound(id, workspaceID, round+1, usage, nil, "")
 			break
 		}
 		if decision.Status == "complete" {
 			if s.recordAgentRound(id, workspaceID, round+1, usage, nil, "") != nil {
-				s.setAgentSummaryNote(id, "Agent could not persist its completion decision; summary uses evidence collected so far.")
 			}
 			break
 		}
 		if len(steps)+len(decision.Steps) > maxOperationSteps {
-			s.recordAgentRound(id, workspaceID, round+1, usage, nil, "Agent investigation step limit reached; summary uses evidence collected so far.")
+			s.recordAgentRound(id, workspaceID, round+1, usage, nil, "")
 			break
 		}
 		if err = s.recordAgentRound(id, workspaceID, round+1, usage, decision.Steps, ""); err != nil {
-			s.setAgentSummaryNote(id, "Agent could not append further safe checks; summary uses evidence collected so far.")
 			break
 		}
 		var policy string
