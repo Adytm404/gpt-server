@@ -1,0 +1,49 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opsai-server
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - APP_ADDR=:8080
+      - APP_FRONTEND_ORIGIN=${APP_FRONTEND_ORIGIN:-http://localhost:5173}
+      - APP_ALLOWED_ORIGINS=${APP_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-opsai_user}
+      - DB_PASSWORD=${DB_PASSWORD:-opsai_password}
+      - DB_NAME=${DB_NAME:-opsai_db}
+      - DB_SSLMODE=${DB_SSLMODE:-disable}
+      - SERVER_KEY_ENCRYPTION_KEY=${SERVER_KEY_ENCRYPTION_KEY}
+      - MODEL_KEY_ENCRYPTION_KEY=${MODEL_KEY_ENCRYPTION_KEY}
+      - SESSION_TTL=${SESSION_TTL:-720h}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - SSH_CONNECT_TIMEOUT=${SSH_CONNECT_TIMEOUT:-15s}
+      - MODEL_REQUEST_TIMEOUT=${MODEL_REQUEST_TIMEOUT:-60s}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: opsai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-opsai_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-opsai_password}
+      POSTGRES_DB: ${DB_NAME:-opsai_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-opsai_user} -d ${DB_NAME:-opsai_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
