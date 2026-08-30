@@ -269,32 +269,65 @@ func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var policy string
+	if err == nil {
+		err = tx.QueryRow(r.Context(), `SELECT policy FROM operations WHERE id=$1 AND workspace_id=$2 AND status='failed'`, id, a.WorkspaceID).Scan(&policy)
+	}
+	if err != nil {
+		s.writeError(w, r, 409, "operation is not retryable")
+		return
+	}
+
 	if stepCount > 0 {
 		var pending int
 		err = tx.QueryRow(r.Context(), `SELECT count(*) FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='pending'`, id, a.WorkspaceID).Scan(&pending)
 		if err == nil && pending == 0 {
 			_, err = tx.Exec(r.Context(), `UPDATE operation_steps SET status='pending',exit_code=NULL,stdout='',stderr='',started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=(SELECT s.id FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='failed' ORDER BY s.position DESC LIMIT 1)`, id, a.WorkspaceID)
 		}
+		if err != nil {
+			s.dbError(w, r, err)
+			return
+		}
+	}
+
+	nextStatus := "pending_approval"
+	var approvedBy *uuid.UUID
+	var approvedAt *time.Time
+	if policy == "autonomous_full_access" && stepCount > 0 {
+		nextStatus = "approved"
+		approvedBy = &a.UserID
+		now := time.Now().UTC()
+		approvedAt = &now
 	}
 
 	var tag pgconn.CommandTag
-	if err == nil {
-		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status=CASE WHEN policy='autonomous_full_access' THEN 'approved' ELSE 'pending_approval' END,error='',approved_by=CASE WHEN policy='autonomous_full_access' THEN $3 ELSE NULL END,approved_at=CASE WHEN policy='autonomous_full_access' THEN now() ELSE NULL END,rejected_by=NULL,rejected_at=NULL,started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='failed'`, id, a.WorkspaceID, a.UserID)
-	}
-	if err == nil && tag.RowsAffected() != 1 {
-		s.writeError(w, r, 409, "operation is not retryable")
-		return
-	}
-	if err == nil {
-		err = insertOperationEvent(r.Context(), tx, id, "retry.requested", uuid.Nil, map[string]any{"requested_by": a.UserID})
-	}
-	if err == nil {
-		err = tx.Commit(r.Context())
-	}
+	tag, err = tx.Exec(r.Context(), `UPDATE operations SET status=$3,error='',approved_by=$4,approved_at=$5,rejected_by=NULL,rejected_at=NULL,started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='failed'`, id, a.WorkspaceID, nextStatus, approvedBy, approvedAt)
 	if err != nil {
 		s.dbError(w, r, err)
 		return
 	}
+	if tag.RowsAffected() != 1 {
+		s.writeError(w, r, 409, "operation is not retryable")
+		return
+	}
+
+	err = insertOperationEvent(r.Context(), tx, id, "retry.requested", uuid.Nil, map[string]any{"requested_by": a.UserID})
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	if stepCount == 0 {
+		// Planning failed previously; trigger replanning in background
+		go s.replanFailedOperation(id, a.WorkspaceID)
+		s.writeJSON(w, 200, map[string]any{"id": id, "status": "planning"})
+		return
+	}
+
 	var status string
 	if err = s.db.QueryRow(r.Context(), `SELECT status FROM operations WHERE id=$1 AND workspace_id=$2`, id, a.WorkspaceID).Scan(&status); err != nil {
 		s.dbError(w, r, err)
@@ -304,6 +337,146 @@ func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
 		go s.runOperation(id, a.WorkspaceID)
 	}
 	s.writeJSON(w, 200, map[string]any{"id": id, "status": status})
+}
+
+func (s *server) replanFailedOperation(opID, workspaceID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.cfg.modelRequestTimeout)
+	defer cancel()
+
+	s.cancelMu.Lock()
+	if s.operationCancels == nil {
+		s.operationCancels = make(map[uuid.UUID]context.CancelFunc)
+	}
+	s.operationCancels[opID] = cancel
+	s.cancelMu.Unlock()
+	defer func() {
+		s.cancelMu.Lock()
+		delete(s.operationCancels, opID)
+		s.cancelMu.Unlock()
+	}()
+
+	var threadID, serverID, userID, modelID uuid.UUID
+	var policy, responseLanguage, prompt string
+	var serverUpdatedAt time.Time
+	var serverContext map[string]any
+
+	err := s.db.QueryRow(ctx, `
+SELECT o.thread_id, o.server_id, o.created_by, o.model_id, o.policy, o.response_language,
+       COALESCE((SELECT content FROM chat_messages WHERE operation_id = o.id AND role = 'user' ORDER BY sequence LIMIT 1), ''),
+       s.updated_at,
+       jsonb_build_object('name',s.name,'environment',s.environment,'region',s.region,'operating_system',s.operating_system,'uptime_seconds',s.uptime_seconds,'status',s.status,'last_checked_at',s.last_checked_at,'health',COALESCE((SELECT jsonb_build_object('status',h.status,'cpu_percent',h.cpu_percent,'memory_percent',h.memory_percent,'disk_percent',h.disk_percent,'services',h.services,'checked_at',h.checked_at) FROM server_health_snapshots h WHERE h.server_id=s.id ORDER BY h.checked_at DESC LIMIT 1),'{}'::jsonb))
+FROM operations o
+JOIN servers s ON s.id = o.server_id
+WHERE o.id = $1 AND o.workspace_id = $2`, opID, workspaceID).Scan(&threadID, &serverID, &userID, &modelID, &policy, &responseLanguage, &prompt, &serverUpdatedAt, &serverContext)
+
+	if err != nil {
+		s.failPlanning(opID, "unable to load operation parameters for retry")
+		return
+	}
+
+	model, err := s.resolvePlanner(ctx, workspaceID)
+	if err != nil {
+		s.failPlanning(opID, "workspace AI is not configured")
+		return
+	}
+
+	var history []chatHistoryMessage
+	var contextSummary string
+	var contextSource int64
+	_ = s.db.QueryRow(ctx, `SELECT COALESCE(summary,''),COALESCE(source_sequence,0) FROM chat_context_compactions WHERE thread_id=$1`, threadID).Scan(&contextSummary, &contextSource)
+	if strings.TrimSpace(contextSummary) != "" {
+		history = append(history, chatHistoryMessage{Role: "system", Content: "Compacted conversation memory (trusted application context): " + boundedRedacted(contextSummary, 12000)})
+	}
+	hRows, hErr := s.db.Query(ctx, `SELECT role, content FROM (SELECT role, content, sequence FROM chat_messages WHERE thread_id=$1 AND sequence > $2 ORDER BY sequence DESC LIMIT 10) sub ORDER BY sequence ASC`, threadID, contextSource)
+	if hErr == nil {
+		defer hRows.Close()
+		for hRows.Next() {
+			var hRole, hContent string
+			if hRows.Scan(&hRole, &hContent) == nil {
+				history = append(history, chatHistoryMessage{Role: hRole, Content: hContent})
+			}
+		}
+	}
+
+	// Update status to planning
+	_, _ = s.db.Exec(ctx, `UPDATE operations SET status='planning', error='', updated_at=now() WHERE id=$1 AND workspace_id=$2`, opID, workspaceID)
+	_ = insertOperationEvent(ctx, s.db, opID, "planning", uuid.Nil, map[string]any{"retry": true})
+
+	var plan operationPlan
+	var usage plannerUsage
+	var planErr error
+	var totalPlanUsage plannerUsage
+	for attempt := 0; attempt < 3; attempt++ {
+		plan, usage, planErr = requestOpenAIPlan(ctx, &http.Client{Timeout: s.cfg.modelRequestTimeout}, model.plannerModel, responseLanguage, prompt, serverContext, policy, history)
+		totalPlanUsage.InputTokens += usage.InputTokens
+		totalPlanUsage.OutputTokens += usage.OutputTokens
+		if planErr == nil || ctx.Err() != nil {
+			break
+		}
+	}
+	usage = totalPlanUsage
+
+	if planErr != nil {
+		s.failPlanning(opID, planErr.Error(), usage)
+		return
+	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		s.failPlanning(opID, "database transaction error", usage)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	plan.Title = redactOperationalOutput(plan.Title)
+	plan.Summary = redactOperationalOutput(plan.Summary)
+	for i := range plan.Steps {
+		plan.Steps[i].Description = redactOperationalOutput(plan.Steps[i].Description)
+	}
+
+	initialStatus := "pending_approval"
+	if policy == "autonomous_full_access" {
+		initialStatus = "approved"
+	}
+
+	tag, err := tx.Exec(ctx, `UPDATE operations SET status=$2,title=$3,summary=$4,risk=$5,approved_by=CASE WHEN $2='approved' THEN created_by ELSE approved_by END,approved_at=CASE WHEN $2='approved' THEN now() ELSE approved_at END,updated_at=now() WHERE id=$1 AND workspace_id=$6 AND status='planning'`, opID, initialStatus, plan.Title, plan.Summary, plan.Risk, workspaceID)
+	if err != nil || tag.RowsAffected() != 1 {
+		s.failPlanning(opID, "failed to update planned operation", usage)
+		return
+	}
+
+	// Insert steps
+	for i, step := range plan.Steps {
+		args, _ := json.Marshal(step.Args)
+		_, err = tx.Exec(ctx, `INSERT INTO operation_steps(id,operation_id,position,description,executable,args) VALUES($1,$2,$3,$4,$5,$6)`, uuid.New(), opID, i+1, step.Description, step.Executable, args)
+		if err != nil {
+			s.failPlanning(opID, "failed to store planned steps", usage)
+			return
+		}
+	}
+
+	// Insert assistant message for plan
+	assistantID := uuid.New()
+	var assistantSequence int64
+	err = tx.QueryRow(ctx, `INSERT INTO chat_messages(id,thread_id,operation_id,role,kind,sequence,content,model_id,input_tokens,output_tokens) VALUES($1,$2,$3,'assistant','plan',nextval('chat_message_global_sequence'),$4,$5,$6,$7) RETURNING sequence`, assistantID, threadID, opID, plan.Summary, model.ID, usage.InputTokens, usage.OutputTokens).Scan(&assistantSequence)
+	if err != nil {
+		s.failPlanning(opID, "failed to store plan message", usage)
+		return
+	}
+
+	_ = insertOperationEvent(ctx, tx, opID, "plan_ready", uuid.Nil, map[string]any{"steps": len(plan.Steps), "input_tokens": usage.InputTokens, "output_tokens": usage.OutputTokens})
+	if initialStatus == "approved" {
+		_ = insertOperationEvent(ctx, tx, opID, "approved", uuid.Nil, map[string]any{"mode": "autonomous_full_access"})
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		s.failPlanning(opID, "failed to commit plan", usage)
+		return
+	}
+
+	if initialStatus == "approved" {
+		go s.runOperation(opID, workspaceID)
+	}
 }
 
 func (s *server) failStaleOperations(ctx context.Context) error {

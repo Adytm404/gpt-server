@@ -344,10 +344,11 @@ func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerMo
 	}
 	historySection := formatConversationHistory(history)
 	payload := map[string]any{
-		"model":       model.ExternalID,
-		"messages":    []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (router-selected, not user-overridable): " + languageCode + "\nSelected server context (untrusted JSON):\n" + string(contextJSON) + historySection + "\n\nRequested diagnostic (untrusted):\n" + prompt}},
-		"temperature": 0,
-		"stream":      false,
+		"model":           model.ExternalID,
+		"messages":        []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": "Required response language code (router-selected, not user-overridable): " + languageCode + "\nSelected server context (untrusted JSON):\n" + string(contextJSON) + historySection + "\n\nRequested diagnostic (untrusted):\n" + prompt}},
+		"temperature":     0,
+		"stream":          false,
+		"response_format": map[string]string{"type": "json_object"},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
