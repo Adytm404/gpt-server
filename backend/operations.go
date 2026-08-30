@@ -259,14 +259,24 @@ func (s *server) retryOperation(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	// First, force any steps stuck in 'running' (from a crash/save failure) back to 'failed'
 	// so the retry logic below can find and reset them.
-	_, err = tx.Exec(r.Context(), `UPDATE operation_steps SET status='failed',exit_code=-1,stderr=CASE WHEN stderr='' THEN 'interrupted' ELSE stderr END,finished_at=COALESCE(finished_at,now()),updated_at=now() WHERE operation_id=$1 AND status='running'`, id)
-	var pending int
-	if err == nil {
+	_, _ = tx.Exec(r.Context(), `UPDATE operation_steps SET status='failed',exit_code=-1,stderr=CASE WHEN stderr='' THEN 'interrupted' ELSE stderr END,finished_at=COALESCE(finished_at,now()),updated_at=now() WHERE operation_id=$1 AND status='running'`, id)
+	
+	// Check if this operation has any steps at all (planning failures have 0 steps)
+	var stepCount int
+	err = tx.QueryRow(r.Context(), `SELECT count(*) FROM operation_steps WHERE operation_id=$1`, id).Scan(&stepCount)
+	if err != nil {
+		s.dbError(w, r, err)
+		return
+	}
+
+	if stepCount > 0 {
+		var pending int
 		err = tx.QueryRow(r.Context(), `SELECT count(*) FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='pending'`, id, a.WorkspaceID).Scan(&pending)
+		if err == nil && pending == 0 {
+			_, err = tx.Exec(r.Context(), `UPDATE operation_steps SET status='pending',exit_code=NULL,stdout='',stderr='',started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=(SELECT s.id FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='failed' ORDER BY s.position DESC LIMIT 1)`, id, a.WorkspaceID)
+		}
 	}
-	if err == nil && pending == 0 {
-		_, err = tx.Exec(r.Context(), `UPDATE operation_steps SET status='pending',exit_code=NULL,stdout='',stderr='',started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=(SELECT s.id FROM operation_steps s JOIN operations o ON o.id=s.operation_id WHERE s.operation_id=$1 AND o.workspace_id=$2 AND o.status='failed' AND s.status='failed' ORDER BY s.position DESC LIMIT 1)`, id, a.WorkspaceID)
-	}
+
 	var tag pgconn.CommandTag
 	if err == nil {
 		tag, err = tx.Exec(r.Context(), `UPDATE operations SET status=CASE WHEN policy='autonomous_full_access' THEN 'approved' ELSE 'pending_approval' END,error='',approved_by=CASE WHEN policy='autonomous_full_access' THEN $3 ELSE NULL END,approved_at=CASE WHEN policy='autonomous_full_access' THEN now() ELSE NULL END,rejected_by=NULL,rejected_at=NULL,started_at=NULL,finished_at=NULL,updated_at=now() WHERE id=$1 AND workspace_id=$2 AND status='failed'`, id, a.WorkspaceID, a.UserID)

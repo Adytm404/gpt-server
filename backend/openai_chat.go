@@ -384,11 +384,10 @@ func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerMo
 		if !validUsage(usage) {
 			return operationPlan{}, plannerUsage{}, errors.New("model provider returned invalid usage")
 		}
-		content = stripJSONFence(content)
+		content = extractJSONBlock(content)
 		var plan operationPlan
 		decoder := json.NewDecoder(strings.NewReader(content))
-		decoder.DisallowUnknownFields()
-		if decoder.Decode(&plan) != nil || decoder.Decode(&struct{}{}) == nil {
+		if decoder.Decode(&plan) != nil {
 			return operationPlan{}, usage, errors.New("model provider returned invalid plan JSON")
 		}
 		if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
@@ -417,11 +416,10 @@ func requestOpenAIPlan(ctx context.Context, client *http.Client, model plannerMo
 	if !validUsage(usage) {
 		return operationPlan{}, plannerUsage{}, errors.New("model provider returned invalid usage")
 	}
-	content := stripJSONFence(response.Choices[0].Message.Content)
+	content := extractJSONBlock(response.Choices[0].Message.Content)
 	var plan operationPlan
 	decoder := json.NewDecoder(strings.NewReader(content))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&plan) != nil || decoder.Decode(&struct{}{}) == nil {
+	if decoder.Decode(&plan) != nil {
 		return operationPlan{}, usage, errors.New("model provider returned invalid plan JSON")
 	}
 	if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
