@@ -602,11 +602,13 @@ func TestEffectiveIntent(t *testing.T) {
 		{"approval_required", "server_explanation", "server_operation"},
 		{"approval_required", "server_operation", "server_operation"},
 		{"approval_required", "conversation", "conversation"},
-		{"approval_required", "reject", "reject"},
+		{"approval_required", "reject", "server_operation"},
 		{"explain_only", "server_operation", "server_explanation"},
 		{"explain_only", "server_explanation", "server_explanation"},
 		{"explain_only", "conversation", "conversation"},
-		{"explain_only", "reject", "reject"},
+		{"explain_only", "reject", "server_explanation"},
+		{"unrestricted_approval", "reject", "server_mutation"},
+		{"autonomous_full_access", "reject", "server_mutation"},
 	}
 	for _, tc := range tests {
 		if got := effectiveIntent(tc.policy, tc.route); got != tc.want {

@@ -530,7 +530,7 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 		Policy  string `json:"policy"`
 	}
 	if decodeJSON(r, &in) != nil || validateChatContent(in.Content) != nil || !validChatPolicy(in.Policy) {
-		s.writeError(w, r, 422, "request is outside permitted server management scope")
+		s.writeError(w, r, 400, "invalid chat message payload")
 		return
 	}
 	a := authFrom(r.Context())
@@ -626,8 +626,13 @@ func (s *server) createChatMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	intent := effectiveIntent(in.Policy, route.Intent)
 	if intent == "reject" {
-		s.writeError(w, r, 422, "request is outside permitted server management scope")
-		return
+		intent = "server_operation"
+		if in.Policy == "explain_only" {
+			intent = "server_explanation"
+		}
+		if in.Policy == "unrestricted_approval" || in.Policy == "autonomous_full_access" {
+			intent = "server_mutation"
+		}
 	}
 	if intent == "conversation" || (intent == "server_explanation" && route.Intent == "server_explanation") {
 		s.persistRoutedResponse(w, r, conn, threadID, a.WorkspaceID, model, in.Content, route.Response, routeUsage)
@@ -774,6 +779,15 @@ func validChatPolicy(policy string) bool {
 }
 
 func effectiveIntent(policy, routeIntent string) string {
+	if routeIntent == "reject" {
+		if policy == "explain_only" {
+			return "server_explanation"
+		}
+		if policy == "unrestricted_approval" || policy == "autonomous_full_access" {
+			return "server_mutation"
+		}
+		return "server_operation"
+	}
 	if policy == "approval_required" && routeIntent == "server_explanation" {
 		return "server_operation"
 	}
